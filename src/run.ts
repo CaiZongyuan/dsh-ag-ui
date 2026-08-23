@@ -52,6 +52,7 @@ class EventQueue implements AsyncIterable<BaseEvent> {
 export class RunController {
   private readonly queue = new EventQueue()
   private readonly settled = Promise.withResolvers<void>()
+  private readonly terminalReserveBytes: number
   private terminal = false
 
   /** DSH turn projected into this HTTP run. */
@@ -65,7 +66,12 @@ export class RunController {
     readonly record: RunRecord,
     private readonly maxEvents: number,
     private readonly maxBytes: number,
-  ) {}
+  ) {
+    this.terminalReserveBytes = Math.max(
+      eventBytes(this.successEvent()),
+      eventBytes(overflowEvent()),
+    )
+  }
 
   /** Resolution after a terminal event has been recorded. */
   get done(): Promise<void> {
@@ -74,12 +80,17 @@ export class RunController {
 
   /** Append the run's required opening event before DSH is driven. */
   start(): void {
-    this.append({
+    const event: BaseEvent = {
       type: EventType.RUN_STARTED,
       threadId: this.input.threadId,
       runId: this.input.runId,
       ...this.input.parentRunId === undefined ? {} : { parentRunId: this.input.parentRunId },
-    })
+    }
+    const bytes = eventBytes(event)
+    if (this.maxEvents < 2 || bytes + this.terminalReserveBytes > this.maxBytes) {
+      throw new AgUiGatewayError('RUN_EVENT_LIMIT_TOO_SMALL', 'The AG-UI run event bounds cannot retain mandatory events.')
+    }
+    this.append(event, bytes)
   }
 
   /**
@@ -88,22 +99,32 @@ export class RunController {
    */
   emit(event: BaseEvent): void {
     if (this.terminal) return
-    const bytes = utf8Bytes(JSON.stringify(event))
-    if (this.record.events.length + 1 >= this.maxEvents || this.record.bytes + bytes > this.maxBytes) {
-      this.error('AG_UI_EVENT_BUFFER_OVERFLOW', 'The AG-UI run exceeded its event buffer.')
+    try {
+      this.assertCanEmit(event)
+    } catch (error) {
+      const failure = error as AgUiGatewayError
+      this.error(failure.code, failure.message)
       return
     }
-    this.append(event, bytes)
+    this.append(event)
+  }
+
+  /**
+   * Reject an event that cannot fit while preserving one terminal-event slot.
+   * @param event - candidate non-terminal event.
+   */
+  assertCanEmit(event: BaseEvent): void {
+    const bytes = eventBytes(event)
+    if (this.terminal
+      || this.record.events.length + 1 >= this.maxEvents
+      || this.record.bytes + bytes + this.terminalReserveBytes > this.maxBytes) {
+      throw new AgUiGatewayError('AG_UI_EVENT_BUFFER_OVERFLOW', 'The AG-UI run exceeded its event buffer.')
+    }
   }
 
   /** Finish the run with a successful AG-UI outcome. */
   success(): void {
-    this.finish({
-      type: EventType.RUN_FINISHED,
-      threadId: this.input.threadId,
-      runId: this.input.runId,
-      outcome: { type: 'success' },
-    })
+    this.finish(this.successEvent())
   }
 
   /**
@@ -137,7 +158,16 @@ export class RunController {
     if (!response.destroyed && !response.writableEnded) response.end()
   }
 
-  private append(event: BaseEvent, bytes = utf8Bytes(JSON.stringify(event))): void {
+  private successEvent(): BaseEvent {
+    return {
+      type: EventType.RUN_FINISHED,
+      threadId: this.input.threadId,
+      runId: this.input.runId,
+      outcome: { type: 'success' },
+    }
+  }
+
+  private append(event: BaseEvent, bytes = eventBytes(event)): void {
     this.record.events.push(event)
     this.record.bytes += bytes
     this.queue.push(event)
@@ -145,12 +175,36 @@ export class RunController {
 
   private finish(event: BaseEvent): void {
     if (this.terminal) return
+    let terminal = event
+    let bytes = eventBytes(terminal)
+    if (this.record.events.length + 1 > this.maxEvents || this.record.bytes + bytes > this.maxBytes) {
+      terminal = overflowEvent()
+      bytes = eventBytes(terminal)
+    }
+    /* v8 ignore next -- validated config and non-terminal reservations guarantee the fallback fits. */
+    if (this.record.events.length + 1 > this.maxEvents || this.record.bytes + bytes > this.maxBytes) {
+      throw new AgUiGatewayError('RUN_EVENT_LIMIT_TOO_SMALL', 'The AG-UI run event bounds cannot retain a terminal event.')
+    }
     this.terminal = true
-    this.append(event)
+    this.append(terminal, bytes)
     this.record.state = 'completed'
     this.queue.close()
     this.settled.resolve()
   }
+}
+
+/** Stable bounded terminal event used when another event cannot be retained. */
+function overflowEvent(): BaseEvent {
+  return {
+    type: EventType.RUN_ERROR,
+    code: 'AG_UI_EVENT_BUFFER_OVERFLOW',
+    message: 'The AG-UI run exceeded its event buffer.',
+  }
+}
+
+/** Measure one complete retained AG-UI event. */
+function eventBytes(event: BaseEvent): number {
+  return utf8Bytes(JSON.stringify(event))
 }
 
 /**

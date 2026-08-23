@@ -52,6 +52,7 @@ const OPTIONS: ThreadOptions = {
   maxRunEvents: 128,
   maxRunEventBytes: 128 * 1024,
   maxRunsPerThread: 4,
+  maxStateBytes: 64 * 1024,
 }
 
 function textResponse(text: string): StreamChunk[] {
@@ -124,10 +125,16 @@ interface ThreadBindingInternals {
   runLedger: Map<string, { digest: string; events: []; state: 'active' | 'completed'; bytes: number }>
   callPositions: Map<string, { turn: number; step: number; name: string }>
   frontendSteps: Set<string>
+  sharedState: unknown
+  sharedStateActive: boolean
+  stateCallIds: Set<string>
+  pendingStateCommits: Map<string, { value: unknown; changed: boolean }>
   applyFrontendTools(tools: Tool[]): void
   continuationTurn(messages: Extract<RunAgentInput['messages'][number], { role: 'tool' }>[]): number
   definitionFor(item: { tool: Tool; fingerprint: string; schema: Tool['parameters'] }): ToolDefinition
   parkFrontendTool(name: string, schema: Tool['parameters'], args: unknown, exec: ToolRunContext): Promise<string>
+  prepareSharedStateUpdate(args: unknown, exec: ToolRunContext): string
+  clearStateCallsForTurn(turn: number): void
   onSessionEvent(event: SessionEvent): void
   onAgentError(error: unknown): void
 }
@@ -277,7 +284,11 @@ describe('ThreadBinding frontend Tools', () => {
   it('rejects invalid names, duplicates, schemas, and inherited collisions', async () => {
     const { ctx, binding } = await mount()
     const cases: Array<[string, Tool[], string]> = [
-      ['bad-name', [{ ...TOOL, name: 'bad' }], 'INVALID_FRONTEND_TOOL_NAME'],
+      ['bad-name', [{ ...TOOL, name: 'bad name' }], 'INVALID_FRONTEND_TOOL_NAME'],
+      ['dot-name', [{ ...TOOL, name: 'bad.name' }], 'INVALID_FRONTEND_TOOL_NAME'],
+      ['colon-name', [{ ...TOOL, name: 'bad:name' }], 'INVALID_FRONTEND_TOOL_NAME'],
+      ['long-name', [{ ...TOOL, name: `a${'b'.repeat(64)}` }], 'INVALID_FRONTEND_TOOL_NAME'],
+      ['reserved', [{ ...TOOL, name: 'ag_ui_update_state' }], 'RESERVED_FRONTEND_TOOL_NAME'],
       ['duplicate', [TOOL, TOOL], 'DUPLICATE_FRONTEND_TOOL'],
       ['schema', [{ ...TOOL, parameters: { type: 'string' } }], 'AGENT_EXECUTION_ERROR'],
     ]
@@ -294,6 +305,23 @@ describe('ThreadBinding frontend Tools', () => {
     await collision.done
     expect(collision.record.events.at(-1)).toMatchObject({ code: 'FRONTEND_TOOL_NAME_COLLISION' })
     unregister()
+  })
+
+  it('accepts provider-safe hyphenated and exact-length frontend Tool names', async () => {
+    const { binding } = await mount([textResponse('first'), textResponse('second')])
+    const names = ['generate-haiku', `a${'b'.repeat(63)}`]
+    for (const [index, name] of names.entries()) {
+      const tool = { ...TOOL, name }
+      const controller = binding.reserveRun(input(
+        `safe-name-run-${String(index)}`,
+        [{ id: `safe-name-message-${String(index)}`, role: 'user', content: 'hello' }],
+        [tool],
+      ), `safe-name-digest-${String(index)}`)
+      binding.drive(controller)
+      await controller.done
+      await binding.liveAgent.whenIdle()
+      expect(binding.liveAgent.ctx.tools.get(name, binding.liveAgent)?.name).toBe(name)
+    }
   })
 
   it('reports a frontend Tool failure and continues the same turn', async () => {
@@ -377,6 +405,259 @@ describe('ThreadBinding frontend Tools', () => {
     const unregister = ctx.tools.register(globalTool(TOOL.name))
     await binding.liveAgent.whenIdle()
     expect(binding.liveAgent.status).toBe('idle')
+    unregister()
+  })
+})
+
+describe('ThreadBinding shared state', () => {
+  it('activates once, accepts later baselines, and presents the reserved Tool', async () => {
+    const { ctx, binding } = await mount([
+      textResponse('inactive'),
+      textResponse('first'),
+      textResponse('second'),
+      textResponse('third'),
+    ])
+    const inactive = binding.reserveRun({
+      ...input('state-run-inactive', [{ id: 'state-message-inactive', role: 'user', content: 'no state' }]),
+      state: [],
+    }, 'state-digest-inactive')
+    binding.drive(inactive)
+    await inactive.done
+    await binding.liveAgent.whenIdle()
+    expect(inactive.record.events.some(event => event.type === EventType.STATE_SNAPSHOT)).toBe(false)
+
+    const first = binding.reserveRun({
+      ...input('state-run-1', [{ id: 'state-message-1', role: 'user', content: 'start state' }]),
+      state: { count: 1 },
+    }, 'state-digest-1')
+    binding.drive(first)
+    await first.done
+    await binding.liveAgent.whenIdle()
+    expect(first.record.events).toContainEqual({ type: EventType.STATE_SNAPSHOT, snapshot: { count: 1 } })
+
+    const definition = binding.liveAgent.ctx.tools.get('ag_ui_update_state', binding.liveAgent)
+    expect(definition?.presentCall?.({ state_updates: { count: 2 } })).toMatchObject({
+      card: 'generic',
+      title: 'Update shared state',
+    })
+    expect(definition?.output.render({}, { value: 2 })).toEqual([
+      { type: 'text', text: '{"value":2}' },
+    ])
+
+    const second = binding.reserveRun({
+      ...input('state-run-2', [{ id: 'state-message-2', role: 'user', content: 'clear state' }]),
+      state: {},
+    }, 'state-digest-2')
+    binding.drive(second)
+    await second.done
+    await binding.liveAgent.whenIdle()
+    expect(second.record.events).toContainEqual({ type: EventType.STATE_SNAPSHOT, snapshot: {} })
+    expect(internals(binding).sharedState).toEqual({})
+    expect(internals(binding).sharedStateActive).toBe(true)
+
+    const third = binding.reserveRun({
+      ...input('state-run-3', [{ id: 'state-message-3', role: 'user', content: 'retain state' }]),
+      state: undefined,
+    }, 'state-digest-3')
+    binding.drive(third)
+    await third.done
+    await binding.liveAgent.whenIdle()
+    expect(third.record.events).toContainEqual({ type: EventType.STATE_SNAPSHOT, snapshot: {} })
+
+    const unregister = ctx.tools.register(globalTool('ag_ui_update_state'))
+    expect(binding.liveAgent.status).toBe('idle')
+    unregister()
+
+    const ownedAgent = binding.liveAgent
+    await binding.dispose()
+    expect(ctx.tools.get('ag_ui_update_state', ownedAgent)).toBeUndefined()
+    expect(internals(binding)).toMatchObject({
+      sharedState: undefined,
+      sharedStateActive: false,
+    })
+    expect(internals(binding).stateCallIds.size).toBe(0)
+    expect(internals(binding).pendingStateCommits.size).toBe(0)
+  })
+
+  it('rejects oversized baselines and inherited reserved Tool collisions', async () => {
+    const oversized = await mount([], { maxStateBytes: 4 })
+    const tooLarge = oversized.binding.reserveRun({
+      ...input('large-state-run', [{ id: 'large-state-message', role: 'user', content: 'state' }]),
+      state: { value: 'large' },
+    }, 'large-state-digest')
+    oversized.binding.drive(tooLarge)
+    await tooLarge.done
+    expect(tooLarge.record.events.at(-1)).toMatchObject({ code: 'STATE_LIMIT_EXCEEDED' })
+
+    const byteRunId = 'state-overflow-bytes'
+    const opening = { type: EventType.RUN_STARTED, threadId: 'thread-1', runId: byteRunId }
+    const success = { type: EventType.RUN_FINISHED, threadId: 'thread-1', runId: byteRunId, outcome: { type: 'success' } }
+    const failure = {
+      type: EventType.RUN_ERROR,
+      code: 'AG_UI_EVENT_BUFFER_OVERFLOW',
+      message: 'The AG-UI run exceeded its event buffer.',
+    }
+    const mandatoryBytes = Buffer.byteLength(JSON.stringify(opening))
+      + Math.max(Buffer.byteLength(JSON.stringify(success)), Buffer.byteLength(JSON.stringify(failure)))
+    for (const [name, overrides] of [
+      ['count', { maxRunEvents: 2 }],
+      ['bytes', { maxRunEventBytes: mandatoryBytes }],
+    ] as const) {
+      const overflow = await mount([], overrides)
+      const controller = overflow.binding.reserveRun({
+        ...input(`state-overflow-${name}`, [{ id: `state-overflow-message-${name}`, role: 'user', content: 'state' }]),
+        state: { value: 1 },
+      }, `state-overflow-digest-${name}`)
+      overflow.binding.drive(controller)
+      await controller.done
+      expect(controller.record.events.at(-1)).toMatchObject({ code: 'AG_UI_EVENT_BUFFER_OVERFLOW' })
+      expect(overflow.adapter.requests).toEqual([])
+      expect(overflow.binding.liveAgent.session.events.some(event => event.type === 'turn/start')).toBe(false)
+      expect(internals(overflow.binding).sharedStateActive).toBe(false)
+    }
+
+    const collision = await mount([])
+    const unregister = collision.ctx.tools.register(globalTool('ag_ui_update_state'))
+    const run = collision.binding.reserveRun({
+      ...input('state-collision-run', [{ id: 'state-collision-message', role: 'user', content: 'state' }]),
+      state: { value: 1 },
+    }, 'state-collision-digest')
+    collision.binding.drive(run)
+    await run.done
+    expect(run.record.events.at(-1)).toMatchObject({ code: 'SHARED_STATE_TOOL_COLLISION' })
+    unregister()
+  })
+
+  it('does not commit model state when the update snapshot cannot fit', async () => {
+    const overflowError = {
+      type: EventType.RUN_ERROR,
+      code: 'AG_UI_EVENT_BUFFER_OVERFLOW',
+      message: 'The AG-UI run exceeded its event buffer.',
+    }
+    const success = {
+      type: EventType.RUN_FINISHED,
+      threadId: 'thread-1',
+      runId: 'state-update-bytes',
+      outcome: { type: 'success' },
+    }
+    const opening = { type: EventType.RUN_STARTED, threadId: 'thread-1', runId: 'state-update-bytes' }
+    const baseline = { type: EventType.STATE_SNAPSHOT, snapshot: { value: 1 } }
+    const byteLimit = [opening, baseline].reduce((total, event) => total + Buffer.byteLength(JSON.stringify(event)), 0)
+      + Math.max(Buffer.byteLength(JSON.stringify(success)), Buffer.byteLength(JSON.stringify(overflowError)))
+
+    for (const [name, overrides] of [
+      ['count', { maxRunEvents: 3 }],
+      ['bytes', { maxRunEventBytes: byteLimit }],
+    ] as const) {
+      const runId = name === 'bytes' ? 'state-update-bytes' : 'state-update-count'
+      const fixture = await mount([
+        toolResponse(`state-update-${name}`, { value: 2 }),
+        textResponse('state update rejected'),
+      ], overrides)
+      const controller = fixture.binding.reserveRun({
+        ...input(runId, [{ id: `state-update-message-${name}`, role: 'user', content: 'update state' }]),
+        state: { value: 1 },
+      }, `state-update-digest-${name}`)
+      fixture.binding.drive(controller)
+      await controller.done
+      await fixture.binding.liveAgent.whenIdle()
+
+      expect(internals(fixture.binding).sharedState).toEqual({ value: 1 })
+      expect(controller.record.events.filter(event => event.type === EventType.STATE_SNAPSHOT)).toEqual([
+        { type: EventType.STATE_SNAPSHOT, snapshot: { value: 1 } },
+      ])
+      expect(controller.record.events.at(-1)).toMatchObject({ code: 'AG_UI_EVENT_BUFFER_OVERFLOW' })
+      expect(fixture.binding.liveAgent.session.events.some(event => event.type === 'tool/result'
+        && event.data.message.content[0].isError === true)).toBe(true)
+    }
+  })
+
+  it('rejects invalid, duplicate, and oversized prepared state updates', async () => {
+    const inactive = await mount([])
+    const inactiveState = internals(inactive.binding)
+    const inactiveExec = {
+      callId: CallId('inactive-state-call'),
+      signal: new AbortController().signal,
+    } as ToolRunContext
+    inactiveState.stateCallIds.add('inactive-state-call')
+    expect(() => inactiveState.prepareSharedStateUpdate({ state_updates: {} }, inactiveExec))
+      .toThrow('Shared state is not active')
+
+    const { binding } = await mount([textResponse('state active')], { maxStateBytes: 32 })
+    const run = binding.reserveRun({
+      ...input('state-private-run', [{ id: 'state-private-message', role: 'user', content: 'state' }]),
+      state: { value: 1 },
+    }, 'state-private-digest')
+    binding.drive(run)
+    await run.done
+    await binding.liveAgent.whenIdle()
+
+    const state = internals(binding)
+    const signal = new AbortController().signal
+    const exec = { callId: CallId('state-private-call'), signal } as ToolRunContext
+    expect(() => state.prepareSharedStateUpdate({ state_updates: { value: 2 } }, exec))
+      .toThrow('no DSH call position')
+    state.stateCallIds.add('state-private-call')
+    expect(() => state.prepareSharedStateUpdate({}, exec)).toThrow('state_updates object')
+    expect(() => state.prepareSharedStateUpdate({ state_updates: { value: 'x'.repeat(40) } }, exec))
+      .toThrow('exceeds the configured state byte limit')
+    state.pendingStateCommits.set('state-private-call', { value: { value: 2 }, changed: true })
+    expect(() => state.prepareSharedStateUpdate({ state_updates: { value: 2 } }, exec))
+      .toThrow('already pending')
+
+    const stateController = binding.reserveRun(input(
+      'state-direct-controller',
+      [{ id: 'state-direct-controller-message', role: 'user', content: 'state' }],
+    ), 'state-direct-controller-digest')
+    stateController.start()
+    const scalarExec = {
+      callId: CallId('state-scalar-call'),
+      signal,
+    } as ToolRunContext
+    state.sharedState = 'scalar'
+    state.stateCallIds.add('state-scalar-call')
+    expect(JSON.parse(state.prepareSharedStateUpdate({ state_updates: { value: 3 } }, scalarExec)))
+      .toMatchObject({ state: { value: 3 } })
+    stateController.error('TEST_DONE', 'done')
+  })
+
+  it('clears orphaned state calls and cancels a late global collision', async () => {
+    const { ctx, binding } = await mount([textResponse('state active'), textResponse('should be cancelled')])
+    const first = binding.reserveRun({
+      ...input('state-late-1', [{ id: 'state-late-message-1', role: 'user', content: 'state' }]),
+      state: { value: 1 },
+    }, 'state-late-digest-1')
+    binding.drive(first)
+    await first.done
+    await binding.liveAgent.whenIdle()
+
+    const state = internals(binding)
+    state.stateCallIds.add('other-turn-call')
+    state.callPositions.set('other-turn-call', { turn: 2, step: 1, name: 'ag_ui_update_state' })
+    state.pendingStateCommits.set('other-turn-call', { value: { value: 2 }, changed: true })
+    state.clearStateCallsForTurn(1)
+    expect(state.stateCallIds.has('other-turn-call')).toBe(true)
+    state.clearStateCallsForTurn(2)
+    expect(state.stateCallIds.has('other-turn-call')).toBe(false)
+    expect(state.pendingStateCommits.has('other-turn-call')).toBe(false)
+
+    const second = binding.reserveRun(input(
+      'state-late-2',
+      [{ id: 'state-late-message-2', role: 'user', content: 'continue' }],
+    ), 'state-late-digest-2')
+    binding.drive(second)
+    const unregister = ctx.tools.register(globalTool('ag_ui_update_state'))
+    await second.done
+    await binding.liveAgent.whenIdle()
+    expect(second.record.events.at(-1)).toMatchObject({ code: 'SHARED_STATE_TOOL_COLLISION' })
+
+    const third = binding.reserveRun({
+      ...input('state-late-3', [{ id: 'state-late-message-3', role: 'user', content: 'retry' }]),
+      state: undefined,
+    }, 'state-late-digest-3')
+    binding.drive(third)
+    await third.done
+    expect(third.record.events.at(-1)).toMatchObject({ code: 'SHARED_STATE_TOOL_COLLISION' })
     unregister()
   })
 })
@@ -517,7 +798,7 @@ describe('ThreadBinding session projection', () => {
     await first.done
     const second = binding.reserveRun(input('run-sync-2', [
       { id: 'result-sync', role: 'tool', toolCallId: 'sync-call', content: 'ok' },
-    ], [{ ...TOOL, name: 'invalid' }]), 'digest-sync-2')
+    ], [{ ...TOOL, name: 'invalid name' }]), 'digest-sync-2')
     binding.drive(second)
     await second.done
     expect(second.record.events.at(-1)).toMatchObject({ code: 'FRONTEND_TOOL_SYNC_FAILED' })

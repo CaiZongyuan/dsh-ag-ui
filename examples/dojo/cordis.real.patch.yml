@@ -1,0 +1,22 @@
+# Apply this after installing the local bundle into a full DSH web Profile. It
+# reuses that Profile's model providers, settings, credentials, Agent runtime,
+# and Host services while adding the Dojo BFF routes from this checkout.
+- id: webserver
+  config:
+    host: !!js process.env.HOST || '0.0.0.0'
+    port: !!js Number(process.env.PORT || 8020)
+
+- id: ag-ui
+  disabled: false
+  config:
+    provider: !!js process.env.DSH_AG_UI_PROVIDER
+    model: !!js process.env.DSH_AG_UI_MODEL
+    sharedSecret: !!js process.env.DSH_AG_UI_SHARED_SECRET
+    path: /_internal/ag-ui
+    allowNonLoopback: true
+
+- insert:
+    - id: dojo-host
+      name: dsh-ag-ui/dojo-host
+      config:
+        debug: !!js process.env.DSH_AG_UI_DOJO_DEBUG === '1'

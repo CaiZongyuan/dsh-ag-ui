@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Bidirectional shared state with `STATE_SNAPSHOT` and the reserved `ag_ui_update_state` Tool.
+- Dojo-compatible keyless examples for chat, backend Tools, shared state, HITL, and tool-based generative UI.
+
+### Changed
+
+- Browser Tool names now accept standard AG-UI-compatible ASCII identifiers while reserving the internal state Tool name.
+
 ## [0.1.0] - 2026-08-22
 
 ### Added

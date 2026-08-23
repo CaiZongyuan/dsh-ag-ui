@@ -96,14 +96,63 @@ describe('AG-UI run buffering', () => {
     expect(ledger.events).toHaveLength(2)
   })
 
-  it('terminates with overflow when event bytes exceed the bound', async () => {
+  it('terminates with overflow without exceeding the complete byte bound', async () => {
     const ledger = record()
-    const controller = new RunController(1, INPUT, ledger, 10, 1)
+    const terminal = {
+      type: EventType.RUN_ERROR,
+      code: 'AG_UI_EVENT_BUFFER_OVERFLOW',
+      message: 'The AG-UI run exceeded its event buffer.',
+    } as BaseEvent
+    const maxBytes = utf8Bytes(JSON.stringify(terminal))
+    const controller = new RunController(1, INPUT, ledger, 10, maxBytes)
     controller.emit({ type: EventType.RAW, event: { too: 'large' } })
     await controller.done
-    expect(ledger.events).toEqual([
-      expect.objectContaining({ type: EventType.RUN_ERROR, code: 'AG_UI_EVENT_BUFFER_OVERFLOW' }),
-    ])
+    expect(ledger.events).toEqual([terminal])
+    expect(ledger.bytes).toBe(maxBytes)
+  })
+
+  it('retains opening, data, and terminal events at the exact byte bound', async () => {
+    const ledger = record()
+    const opening = { type: EventType.RUN_STARTED, threadId: INPUT.threadId, runId: INPUT.runId } as BaseEvent
+    const data = { type: EventType.RAW, event: { value: 1 } } as BaseEvent
+    const failure = {
+      type: EventType.RUN_ERROR,
+      code: 'AG_UI_EVENT_BUFFER_OVERFLOW',
+      message: 'The AG-UI run exceeded its event buffer.',
+    } as BaseEvent
+    const success = {
+      type: EventType.RUN_FINISHED,
+      threadId: INPUT.threadId,
+      runId: INPUT.runId,
+      outcome: { type: 'success' },
+    } as BaseEvent
+    const successIsLargest = utf8Bytes(JSON.stringify(success)) >= utf8Bytes(JSON.stringify(failure))
+    const terminal = successIsLargest ? success : failure
+    const maxBytes = [opening, data, terminal]
+      .reduce((total, event) => total + utf8Bytes(JSON.stringify(event)), 0)
+    const controller = new RunController(1, INPUT, ledger, 3, maxBytes)
+    controller.start()
+    controller.emit(data)
+    if (successIsLargest) controller.success()
+    else controller.error('AG_UI_EVENT_BUFFER_OVERFLOW', 'The AG-UI run exceeded its event buffer.')
+    await controller.done
+    expect(ledger.events).toEqual([opening, data, terminal])
+    expect(ledger.bytes).toBe(maxBytes)
+  })
+
+  it('falls back to a bounded terminal error and rejects impossible opening bounds', async () => {
+    const ledger = record()
+    const controller = new RunController(1, INPUT, ledger, 2, 10_000)
+    controller.start()
+    controller.error('X'.repeat(20_000), 'Y'.repeat(20_000))
+    await controller.done
+    expect(ledger.events.at(-1)).toMatchObject({ code: 'AG_UI_EVENT_BUFFER_OVERFLOW' })
+    expect(ledger.bytes).toBeLessThanOrEqual(10_000)
+
+    expect(() => new RunController(1, INPUT, record(), 1, 10_000).start())
+      .toThrow('cannot retain mandatory events')
+    expect(() => new RunController(1, INPUT, record(), 2, 1).start())
+      .toThrow('cannot retain mandatory events')
   })
 
   it('streams queued events through response backpressure and ends once', async () => {

@@ -12,10 +12,3 @@
         model: !!js process.env.DSH_AG_UI_MODEL
         sharedSecret: !!js process.env.DSH_AG_UI_SHARED_SECRET
         path: !!js process.env.DSH_AG_UI_PATH || '/ag-ui'
-
-    - id: ag-ui-invariant
-      name: dsh-ag-ui/invariant
-      disabled: !!js >-
-        !process.env.DSH_AG_UI_PROVIDER ||
-        !process.env.DSH_AG_UI_MODEL ||
-        !process.env.DSH_AG_UI_SHARED_SECRET

@@ -20,6 +20,8 @@
 - AG-UI 文本流与 backend Tool result 投影
 - 由 `RunAgentInput.tools` 提供的 Agent-scoped browser Tools
 - 跨 HTTP runs 的 Frontend Tool Promise park 与 ToolMessage continuation
+- 通过 `RunAgentInput.state`、`ag_ui_update_state` 和 `STATE_SNAPSHOT` 实现的双向 shared state
+- 覆盖五项标准 AG-UI feature 的 keyless Dojo-compatible example
 - Run 和 message 幂等
 - Request、context、Tool schema、event buffer、thread 和 run ledger 上限
 - 完整回收 route、Agent、Tool、timer 和 pending call 的 Cordis disposal
@@ -56,31 +58,22 @@ export DSH_AG_UI_PATH='/ag-ui' # 可选
 dsh --profile web
 ```
 
-Bundle 插入两个 Host-plane rows：
-
-- `ag-ui` 加载 Gateway service。
-- `ag-ui-invariant` 注册 package invariant companion。
+Bundle 插入一个 Host-plane `ag-ui` row 来加载 Gateway service。Package 仍导出 `dsh-ag-ui/invariant`；提供 process-global `invariants` service 的 composition 可以显式加载该可选 companion。默认 web Profile 不提供该 service，因此 installable bundle 不会自动挂载 companion。
 
 ## Profile 配置
 
 环境变量是最短配置路径。Profile 也可以在自己的 `cordis.patch.yml` 中覆盖 bundle row：
 
 ```yaml
-- insert:
-    - id: ag-ui
-      name: dsh-ag-ui
-      disabled: false
-      config:
-        provider: openai
-        model: gpt-5.6-sol
-        sharedSecret: !!js process.env.DSH_AG_UI_SHARED_SECRET
-        path: /ag-ui
-        maxThreads: 100
-        frontendToolTimeoutMs: 300000
-
-    - id: ag-ui-invariant
-      name: dsh-ag-ui/invariant
-      disabled: false
+- id: ag-ui
+  disabled: false
+  config:
+    provider: openai
+    model: gpt-5.6-sol
+    sharedSecret: !!js process.env.DSH_AG_UI_SHARED_SECRET
+    path: /ag-ui
+    maxThreads: 100
+    frontendToolTimeoutMs: 300000
 ```
 
 后应用的 Profile patch 会替换 bundle row 的完整 `config`；请包含 deployment 所需的全部配置值。
@@ -116,7 +109,7 @@ Bundle 插入两个 Host-plane rows：
 | `maxRunEventBytes` | `2097152` | 每个 run 最大保留 event bytes |
 | `maxRunsPerThread` | `32` | 每个 thread 最大 run ledger entries |
 
-非 loopback DSH WebServer 需要设置 `allowNonLoopback: true`。推荐把 Gateway 保持在 loopback，并放在同 Host 的 authenticated BFF 后面。
+`maxRunEvents` 必须至少容纳 mandatory opening 与 terminal events。`maxRunEventBytes` 会限制包含 `RUN_STARTED` 和 terminal event 在内的完整 retained Run record，并且必须足以容纳已配置的最大 identity length。非 loopback DSH WebServer 需要设置 `allowNonLoopback: true`。推荐把 Gateway 保持在 loopback，并放在同 Host 的 authenticated BFF 后面。
 
 ## 架构
 
@@ -208,9 +201,63 @@ await agent.runAgent({
 })
 ```
 
-模型调用 `ui_*` Tool 时，当前 HTTP run 成功结束，但 DSH Tool Promise 仍然 pending。浏览器执行 Tool、追加一条使用相同 `toolCallId` 的标准 AG-UI ToolMessage，再开始另一个 run。Gateway resolve 原始 Promise，并继续同一个 DSH turn。
+模型调用 browser-owned Tool 时，当前 HTTP run 成功结束，但 DSH Tool Promise 仍然 pending。浏览器执行 Tool、追加一条使用相同 `toolCallId` 的标准 AG-UI ToolMessage，再开始另一个 run。Gateway resolve 原始 Promise，并继续同一个 DSH turn。
 
 普通 browser Tool result 不要通过 AG-UI `resume[]` 发送；该字段保留给显式 interrupt/HITL flow。
+
+## Shared state
+
+在第一次 run 前设置非空初始值以激活 shared state：
+
+```ts
+agent.setState({
+  recipe: {
+    title: 'Draft',
+    ingredients: [],
+  },
+})
+```
+
+Gateway 把已接受 state 注入 DSH Session，在精确 Agent scope 注册保留 Tool `ag_ui_update_state`，并发送 `STATE_SNAPSHOT`。每个 snapshot 到达时，官方 client 会替换 `agent.state`。
+
+State Tool 接受：
+
+```json
+{
+  "state_updates": {
+    "recipe": {
+      "title": "Pasta Primavera"
+    }
+  }
+}
+```
+
+更新采用 top-level shallow merge：未提供的 top-level key 保留，提供的 nested value 会替换此前 nested value。Gateway 使用 `maxStateBytes` 检查 merge 后的完整 state。只有在 DSH 追加 durable `tool/result` 后，Gateway 才 commit model update 并发送 snapshot；相等更新会保留 Tool result，但不会发送重复的 changed-state snapshot。
+
+Client 不使用 shared state 时发送的默认空 state 不会触发首次激活。激活后，空 object、array 或 `null` 都是合法的完整 baseline；省略 `state` 则保留当前 thread state。
+
+Shared state 是 model/UI collaboration data。它永远不授予 backend authority，也不应替代应用的 durable database state。当前尚未实现 `STATE_DELTA`。
+
+## Dojo-compatible example
+
+仅 source checkout 提供的 keyless example 通过一个 private Gateway 和同进程 BFF 暴露五个标准 feature paths。Framework-free BFF plugin 本身通过 Loader subpath `dsh-ag-ui/dojo-host` 发布；scripted model 与 launcher 仍是 source fixtures。
+
+```text
+/agentic_chat
+/backend_tool_rendering
+/shared_state
+/human_in_the_loop
+/tool_based_generative_ui
+```
+
+启动命令：
+
+```bash
+pnpm build
+HOST=0.0.0.0 PORT=8020 node examples/dojo/start.mjs
+```
+
+Client example、官方 upstream Dojo UI 兼容路径、real-model Profile 配置与安全限制见 [examples/dojo/README.md](examples/dojo/README.md)。Built-package E2E 使用真实 Cordis Loader 和官方 `HttpAgent` 驱动全部五个 paths。
 
 ## HTTP 与 run 语义
 
@@ -221,6 +268,7 @@ await agent.runAgent({
 - 每个 run 发出一个 `RUN_STARTED` 和恰好一个 `RUN_FINISHED` 或 `RUN_ERROR`。
 - `runId` 是 exact-request idempotency key。已完成的相同 request 会重放 retained events，不再次驱动 DSH。
 - 一个 thread 同时只能有一个 active HTTP run。
+- Active shared-state run 会在 model events 前发送 synchronization snapshot。
 - V1 每个 DSH step 允许一个 frontend Tool call。
 
 ## Client-provided Tools
@@ -228,10 +276,10 @@ await agent.runAgent({
 Browser Tool name 必须匹配：
 
 ```text
-ui_[a-z][a-z0-9_]*
+[A-Za-z_][A-Za-z0-9_-]{0,63}
 ```
 
-Parameter 必须使用 DSH Tools 实际执行验证的 object-rooted JSON Schema 子集。Gateway 拒绝与 inherited/global Tool 冲突的 name，并仅在精确 Agent 的 Tool scope 注册已接受 definition。
+该保守子集遵循常见 model-provider function-name limits；AG-UI 本身并不要求这条精确正则。`ag_ui_update_state` 是 protocol shared state 的保留名。Browser Tool parameter 必须使用 DSH Tools 实际执行验证的 object-rooted JSON Schema 子集。Gateway 拒绝与 inherited/global Tool 冲突的 name，并仅在精确 Agent 的 Tool scope 注册已接受 definition。
 
 Backend Tool result 会发出 `TOOL_CALL_RESULT`。Frontend Tool result 不在 AG-UI wire 上回显，因为浏览器已经追加 ToolMessage；DSH 仍会记录真实 durable `tool/result`。
 
@@ -267,11 +315,25 @@ DSH 仍处于 developer preview，可能引入 breaking changes。在这些 API 
 
 Append-only context 保留较早的可复用 history。变化后的当前 context 添加新 suffix；provider cache 是否可用不属于本 package 的职责。
 
+### Shared application state
+
+#### 模型看到什么
+
+激活后，完整有界 state 会出现在 `Current Shared State` section 中，保留 Tool `ag_ui_update_state` 会进入 Agent schema。成功的 state update 会把完整 merge 后 state 作为 durable DSH Tool result 返回。
+
+#### Token 影响
+
+有条件且保留。每个 shared state active 的 accepted run 都会追加完整 state baseline。Model update 还会追加一组包含完整 merge 后 state 的 Tool call/result。
+
+#### KV cache 影响
+
+此前不变的 history 仍可复用，但每个当前 state baseline 和 changed Tool result 都会增加 suffix。体积大或频繁变化的 state 会降低 cache reuse，并增加 Session 保留 tokens。
+
 ### Client-provided capabilities
 
 #### 模型看到什么
 
-当前 Agent-scoped `ui_*` definitions 会进入普通 DSH Tool schema 列表。Name、description 和经过验证的 parameter schemas 来自 authenticated client request；execution 仍由浏览器持有。
+当前 Agent-scoped browser Tool definitions 会进入普通 DSH Tool schema 列表。Name、description 和经过验证的 parameter schemas 来自 authenticated client request；execution 仍由浏览器持有。
 
 #### Token 影响
 
@@ -283,12 +345,13 @@ Tool set 不变时保留 Tool-schema prefix。添加、删除或修改 Tool 可�
 
 ## 已知限制
 
-- Thread 和 run state 是 process-local。
-- Host restart 不会调用 `agents.resume()`，也不会恢复 parked browser Tool。
+- Thread、run 和 shared state 都是 process-local。
+- Host restart 不会调用 `agents.resume()`、恢复 parked browser Tool，或在没有新 client baseline 时恢复 shared state。
 - 只适配 text user input、assistant text 和 string Tool results。
 - 每个 DSH step 只允许一个 frontend Tool call。
 - 不支持 partial SSE reconnect。
-- 尚未适配 AG-UI interrupt/HITL `resume[]`、multimodal messages、reasoning events 和 state event families。
+- 尚未适配 `STATE_DELTA`、AG-UI interrupt/HITL `resume[]`、multimodal messages、reasoning events 和 activity events。
+- Shared-state update 使用 top-level shallow merge，不提供 version、deep merge 或 conflict resolution。
 
 ## 开发
 
@@ -300,7 +363,7 @@ pnpm install
 pnpm check
 ```
 
-`pnpm check` 会运行 lint、strict TypeScript、per-file coverage、runtime/type builds 和 publint。
+`pnpm check` 会运行 lint、strict TypeScript、per-file coverage、runtime/type builds 和 publint。Dojo fixture 仅用于 source checkout，不包含在 npm tarball 中。
 
 贡献和发布要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 

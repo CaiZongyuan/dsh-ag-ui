@@ -29,6 +29,7 @@
       "types": "./lib/types/invariant.d.ts",
       "default": "./lib/invariant.js"
     },
+    "./dojo-host": "./examples/dojo/dojo-host.mjs",
     "./package.json": "./package.json"
   },
   "files": [
@@ -39,6 +40,9 @@
     "lib/types/**/*.d.ts",
     "lib/types/**/*.d.ts.map",
     "cordis.patch.yml",
+    "examples/dojo/dojo-host.mjs",
+    "examples/dojo/scenario-state.mjs",
+    "examples/dojo/scenarios.mjs",
     "README.md",
     "README.zh.md",
     "CHANGELOG.md",

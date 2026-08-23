@@ -19,12 +19,14 @@ import {
   type ToolRunContext,
 } from '@deepseek-ai/dsh-tools'
 import { randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import { AgUiGatewayError } from './errors.ts'
-import { valueDigest } from './json.ts'
+import { jsonBytes, valueDigest } from './json.ts'
 import { RunController, type RunRecord } from './run.ts'
 import type { AgUiPrincipal, AgUiThreadIdentity } from './types.ts'
 
-const FRONTEND_TOOL_NAME = /^ui_[a-z][a-z0-9_]{0,62}$/
+const FRONTEND_TOOL_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/
+const STATE_TOOL_NAME = 'ag_ui_update_state'
 
 /** Runtime limits and model route resolved from Gateway config. */
 export interface ThreadOptions {
@@ -35,6 +37,7 @@ export interface ThreadOptions {
   readonly maxRunEvents: number
   readonly maxRunEventBytes: number
   readonly maxRunsPerThread: number
+  readonly maxStateBytes: number
 }
 
 interface AcceptedMessage {
@@ -75,6 +78,16 @@ interface PreparedFrontendTool {
   readonly schema: ObjectJsonSchema & Record<string, unknown>
 }
 
+interface SharedStateBaseline {
+  readonly active: boolean
+  readonly value: unknown
+}
+
+interface PendingStateCommit {
+  readonly value: unknown
+  readonly changed: boolean
+}
+
 /** One authenticated process-local AG-UI thread and its owned DSH Agent. */
 export class ThreadBinding {
   /** Random DSH Agent and Session identity, never derived from a client thread id. */
@@ -98,6 +111,11 @@ export class ThreadBinding {
   private readonly callPositions = new Map<string, ToolCallPosition>()
   private readonly frontendSteps = new Set<string>()
   private readonly text = new Map<string, TextProjection>()
+  private sharedState: unknown
+  private sharedStateActive = false
+  private stateToolDispose: (() => void) | undefined
+  private readonly stateCallIds = new Set<string>()
+  private readonly pendingStateCommits = new Map<string, PendingStateCommit>()
 
   constructor(
     private readonly ctx: Context,
@@ -214,8 +232,11 @@ export class ThreadBinding {
         if (this.liveAgent.status !== 'idle' || this.pendingCalls.size !== 0) {
           throw new AgUiGatewayError('AGENT_BUSY', 'The thread Agent is not ready for a new user run.', 409)
         }
+        const baseline = this.prepareSharedState(controller.input)
+        this.assertStateToolAvailable(baseline)
         this.applyFrontendTools(controller.input.tools)
-        this.injectContext(controller.input)
+        this.injectContext(controller.input, baseline)
+        this.commitSharedStateBaseline(baseline)
         const message = createUserMessage({
           content: [{ type: 'text', text: admission.message.content }],
           source: { kind: 'user' },
@@ -231,8 +252,11 @@ export class ThreadBinding {
 
       const turn = this.continuationTurn(admission.messages)
       controller.turn = turn
+      const baseline = this.prepareSharedState(controller.input)
+      this.assertStateToolAvailable(baseline)
       this.stagedTools = controller.input.tools
-      this.injectContext(controller.input)
+      this.injectContext(controller.input, baseline)
+      this.commitSharedStateBaseline(baseline)
       for (const message of admission.messages) {
         const pending = this.pendingCalls.get(message.toolCallId)
         /* v8 ignore next 3 -- continuationTurn synchronously verified the identical pending entries. */
@@ -274,6 +298,12 @@ export class ThreadBinding {
       pending.reject(new Error('AG-UI thread disposed'))
     }
     this.pendingCalls.clear()
+    this.stateToolDispose?.()
+    this.stateToolDispose = undefined
+    this.sharedState = undefined
+    this.sharedStateActive = false
+    this.stateCallIds.clear()
+    this.pendingStateCommits.clear()
     for (const registration of this.frontendTools.values()) registration.dispose()
     this.frontendTools.clear()
     const handle = this.handle
@@ -341,9 +371,15 @@ export class ThreadBinding {
     return turn
   }
 
-  private injectContext(input: RunAgentInput): void {
-    if (input.context.length === 0) return
+  private injectContext(input: RunAgentInput, baseline: SharedStateBaseline): void {
     const sections = input.context.map(item => ({ name: item.description, text: item.value }))
+    if (baseline.active) {
+      sections.push({
+        name: 'Current Shared State',
+        text: `${JSON.stringify(baseline.value)}\n\nTo update this state, call ${STATE_TOOL_NAME} with a state_updates object.`,
+      })
+    }
+    if (sections.length === 0) return
     const text = sections.map(section => `## ${section.name}\n${section.text}`).join('\n\n')
     this.liveAgent.inject(createUserMessage({
       content: [{ type: 'text', text }],
@@ -351,12 +387,106 @@ export class ThreadBinding {
     }))
   }
 
+  private prepareSharedState(input: RunAgentInput): SharedStateBaseline {
+    if (!this.sharedStateActive
+      && (input.state === undefined || input.state === null || isEmptyStateContainer(input.state))) {
+      return { active: false, value: undefined }
+    }
+    const value = input.state === undefined ? this.sharedState : structuredClone(input.state)
+    if (jsonBytes(value, 'state') > this.options.maxStateBytes) {
+      throw new AgUiGatewayError('STATE_LIMIT_EXCEEDED', 'state exceeds its limit.', 413)
+    }
+    const active = this.activeRun
+    /* v8 ignore next -- prepareSharedState runs only while drive owns the active controller. */
+    if (active === undefined) throw new Error('Shared state has no active AG-UI run')
+    active.assertCanEmit({ type: EventType.STATE_SNAPSHOT, snapshot: value })
+    return { active: true, value }
+  }
+
+  private assertStateToolAvailable(baseline: SharedStateBaseline): void {
+    if (!baseline.active) return
+    const global = this.ctx.tools.get(STATE_TOOL_NAME)
+    const inherited = this.stateToolDispose === undefined
+      ? this.ctx.tools.get(STATE_TOOL_NAME, this.liveAgent)
+      : undefined
+    if (global !== undefined || inherited !== undefined) {
+      throw new AgUiGatewayError(
+        'SHARED_STATE_TOOL_COLLISION',
+        `The reserved shared-state Tool ${STATE_TOOL_NAME} collides with an inherited Tool.`,
+        409,
+      )
+    }
+  }
+
+  private commitSharedStateBaseline(baseline: SharedStateBaseline): void {
+    if (!baseline.active) return
+    const active = this.activeRun
+    /* v8 ignore next -- run admission owns the active controller through baseline commit. */
+    if (active === undefined) throw new Error('Shared state has no active AG-UI run')
+    this.ensureStateTool()
+    this.sharedState = structuredClone(baseline.value)
+    this.sharedStateActive = true
+    active.emit({ type: EventType.STATE_SNAPSHOT, snapshot: structuredClone(baseline.value) })
+  }
+
+  private ensureStateTool(): void {
+    if (this.stateToolDispose !== undefined) return
+    const definition: ToolDefinition = {
+      name: STATE_TOOL_NAME,
+      description: 'Shallow-merge top-level fields into shared application state. Omitted top-level keys remain; supplied nested values replace their previous values.',
+      parameters: {
+        type: 'object',
+        properties: {
+          state_updates: { type: 'object', additionalProperties: true },
+        },
+        required: ['state_updates'],
+        additionalProperties: false,
+      },
+      output: {
+        schema: { type: 'string' },
+        render(_args, value) {
+          return [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }]
+        },
+      },
+      presentCall: args => ({ card: 'generic', title: 'Update shared state', rawInput: args }),
+      execute: (args, exec) => Promise.resolve(this.prepareSharedStateUpdate(args, exec)),
+    }
+    this.stateToolDispose = this.liveAgent.ctx.tools.register(definition)
+  }
+
+  private prepareSharedStateUpdate(args: unknown, exec: ToolRunContext): string {
+    if (!this.sharedStateActive) throw new Error('Shared state is not active for this AG-UI thread')
+    const callId = String(exec.callId)
+    if (!this.stateCallIds.has(callId)) throw new Error('Shared-state update has no DSH call position')
+    if (this.pendingStateCommits.has(callId)) throw new Error('Shared-state update is already pending')
+    const updates = readStateUpdates(args)
+    const current = this.sharedState
+    const next = isUnknownRecord(current)
+      ? { ...current, ...updates }
+      : { ...updates }
+    if (jsonBytes(next, 'state') > this.options.maxStateBytes) {
+      throw new Error('Shared-state update exceeds the configured state byte limit')
+    }
+    const changed = !isDeepStrictEqual(next, current)
+    if (changed) {
+      const active = this.activeRun
+      /* v8 ignore next -- the state Tool executes only while its owning Run is active. */
+      if (active === undefined) throw new Error('Shared-state update has no active AG-UI run')
+      active.assertCanEmit({ type: EventType.STATE_SNAPSHOT, snapshot: next })
+    }
+    this.pendingStateCommits.set(callId, { value: structuredClone(next), changed })
+    return JSON.stringify({ status: changed ? 'updated' : 'unchanged', state: next })
+  }
+
   private prepareFrontendTools(tools: AgUiTool[]): PreparedFrontendTool[] {
     const prepared: PreparedFrontendTool[] = []
     const names = new Set<string>()
     for (const tool of tools) {
       if (!FRONTEND_TOOL_NAME.test(tool.name)) {
-        throw new AgUiGatewayError('INVALID_FRONTEND_TOOL_NAME', 'Frontend Tool names must match ui_[a-z][a-z0-9_]*.')
+        throw new AgUiGatewayError('INVALID_FRONTEND_TOOL_NAME', 'Frontend Tool names must use a supported ASCII identifier.')
+      }
+      if (tool.name === STATE_TOOL_NAME) {
+        throw new AgUiGatewayError('RESERVED_FRONTEND_TOOL_NAME', `${STATE_TOOL_NAME} is reserved for shared state.`)
       }
       if (names.has(tool.name)) throw new AgUiGatewayError('DUPLICATE_FRONTEND_TOOL', 'Frontend Tool names must be unique.')
       names.add(tool.name)
@@ -512,6 +642,10 @@ export class ThreadBinding {
           step: event.data.step,
           name: event.data.name,
         })
+        if (event.data.name === STATE_TOOL_NAME) {
+          this.stateCallIds.add(callId)
+          break
+        }
         active.emit({
           type: EventType.TOOL_CALL_START,
           toolCallId: callId,
@@ -525,6 +659,16 @@ export class ThreadBinding {
       case 'tool/result': {
         const block = event.data.message.content[0]
         const callId = String(block.toolCallId)
+        if (this.stateCallIds.delete(callId)) {
+          const commit = this.pendingStateCommits.get(callId)
+          this.pendingStateCommits.delete(callId)
+          if (commit !== undefined && !block.isError && commit.changed) {
+            this.sharedState = structuredClone(commit.value)
+            active.emit({ type: EventType.STATE_SNAPSHOT, snapshot: structuredClone(commit.value) })
+          }
+          this.callPositions.delete(callId)
+          break
+        }
         if (!this.frontendCallIds.has(callId)) {
           this.serverResultCallIds.add(callId)
           active.emit({
@@ -539,6 +683,7 @@ export class ThreadBinding {
         break
       }
       case 'turn/end': {
+        this.clearStateCallsForTurn(event.data.turn)
         this.frontendCallIds.clear()
         switch (event.data.reason.kind) {
           case 'completed':
@@ -567,6 +712,15 @@ export class ThreadBinding {
     }
   }
 
+  private clearStateCallsForTurn(turn: number): void {
+    for (const callId of this.stateCallIds) {
+      if (this.callPositions.get(callId)?.turn !== turn) continue
+      this.stateCallIds.delete(callId)
+      this.pendingStateCommits.delete(callId)
+      this.callPositions.delete(callId)
+    }
+  }
+
   private onAgentError(error: unknown): void {
     const active = this.activeRun
     if (active === undefined || active.record.state !== 'active') return
@@ -585,6 +739,16 @@ export class ThreadBinding {
 
   private checkGlobalCollisions(): void {
     if (this.disposed) return
+    if (this.stateToolDispose !== undefined && this.ctx.tools.get(STATE_TOOL_NAME) !== undefined) {
+      this.activeRun?.error(
+        'SHARED_STATE_TOOL_COLLISION',
+        `The reserved shared-state Tool ${STATE_TOOL_NAME} now collides with a global Tool.`,
+      )
+      if (this.agent?.status === 'running') {
+        this.agent.cancel({ kind: 'hook', reason: `AG-UI shared-state Tool ${STATE_TOOL_NAME} collided with a global Tool` })
+      }
+      return
+    }
     for (const name of this.frontendTools.keys()) {
       if (this.ctx.tools.get(name) === undefined) continue
       this.activeRun?.error('FRONTEND_TOOL_NAME_COLLISION', `Frontend Tool ${name} now collides with a global Tool.`)
@@ -614,6 +778,25 @@ export class ThreadBinding {
     if (this.disposed || this.pendingCalls.size !== 0 || this.activeRun !== undefined) return
     this.idleTimer = setTimeout(() => { this.onExpired(this) }, this.options.threadIdleMs)
   }
+}
+
+/** Ignore default empty client state until a thread has activated shared state. */
+function isEmptyStateContainer(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length === 0
+  return isUnknownRecord(value) && Object.keys(value).length === 0
+}
+
+/** Narrow a JSON object without accepting arrays or null. */
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** Read the state-management Tool input after model-boundary validation. */
+function readStateUpdates(args: unknown): Record<string, unknown> {
+  if (!isUnknownRecord(args) || !isUnknownRecord(args.state_updates)) {
+    throw new Error('Shared-state updates must contain a state_updates object')
+  }
+  return structuredClone(args.state_updates)
 }
 
 /** Whether a durable event carries the selected turn. */

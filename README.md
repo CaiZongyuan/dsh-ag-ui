@@ -20,6 +20,8 @@ A community [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 
 - AG-UI text streaming and backend Tool result projection
 - Agent-scoped browser Tools supplied by `RunAgentInput.tools`
 - Frontend Tool Promise parking and ToolMessage continuation across HTTP runs
+- Bidirectional shared state through `RunAgentInput.state`, `ag_ui_update_state`, and `STATE_SNAPSHOT`
+- A keyless Dojo-compatible example for five standard AG-UI features
 - Run and message idempotency
 - Bounded requests, context, Tool schemas, event buffers, threads, and run ledgers
 - Complete Cordis disposal of routes, Agents, Tools, timers, and pending calls
@@ -56,31 +58,22 @@ export DSH_AG_UI_PATH='/ag-ui' # optional
 dsh --profile web
 ```
 
-The bundle inserts two Host-plane rows:
-
-- `ag-ui` loads the Gateway service.
-- `ag-ui-invariant` registers the package invariant companion.
+The bundle inserts one Host-plane `ag-ui` row that loads the Gateway service. The package also exports `dsh-ag-ui/invariant`; compositions that provide a process-global `invariants` service may load that optional companion explicitly. The default web Profile does not provide that service, so the installable bundle does not mount the companion automatically.
 
 ## Profile configuration
 
 Environment variables are the shortest setup path. A Profile can instead override the bundle row in its own `cordis.patch.yml`:
 
 ```yaml
-- insert:
-    - id: ag-ui
-      name: dsh-ag-ui
-      disabled: false
-      config:
-        provider: openai
-        model: gpt-5.6-sol
-        sharedSecret: !!js process.env.DSH_AG_UI_SHARED_SECRET
-        path: /ag-ui
-        maxThreads: 100
-        frontendToolTimeoutMs: 300000
-
-    - id: ag-ui-invariant
-      name: dsh-ag-ui/invariant
-      disabled: false
+- id: ag-ui
+  disabled: false
+  config:
+    provider: openai
+    model: gpt-5.6-sol
+    sharedSecret: !!js process.env.DSH_AG_UI_SHARED_SECRET
+    path: /ag-ui
+    maxThreads: 100
+    frontendToolTimeoutMs: 300000
 ```
 
 A later Profile patch replaces the bundle row's complete `config`; include every value that deployment needs.
@@ -116,7 +109,7 @@ A later Profile patch replaces the bundle row's complete `config`; include every
 | `maxRunEventBytes` | `2097152` | Maximum retained event bytes per run |
 | `maxRunsPerThread` | `32` | Maximum retained run ledger entries per thread |
 
-A non-loopback DSH WebServer requires `allowNonLoopback: true`. Prefer a loopback Gateway behind a same-host authenticated BFF.
+`maxRunEvents` must retain at least the mandatory opening and terminal events. `maxRunEventBytes` bounds the complete retained Run record, including `RUN_STARTED` and its terminal event, and must be large enough for the configured maximum identity length. A non-loopback DSH WebServer requires `allowNonLoopback: true`. Prefer a loopback Gateway behind a same-host authenticated BFF.
 
 ## Architecture
 
@@ -208,9 +201,63 @@ await agent.runAgent({
 })
 ```
 
-If the model calls a `ui_*` Tool, the current HTTP run finishes successfully while the DSH Tool Promise remains pending. The browser executes the Tool, appends one standard AG-UI ToolMessage with the same `toolCallId`, and starts another run. The Gateway resolves the original Promise and continues the same DSH turn.
+If the model calls a browser-owned Tool, the current HTTP run finishes successfully while the DSH Tool Promise remains pending. The browser executes the Tool, appends one standard AG-UI ToolMessage with the same `toolCallId`, and starts another run. The Gateway resolves the original Promise and continues the same DSH turn.
 
 Do not send ordinary browser Tool results through AG-UI `resume[]`; that field is reserved for explicit interrupt/HITL flows.
+
+## Shared state
+
+Activate shared state by setting a non-empty initial value before the first run:
+
+```ts
+agent.setState({
+  recipe: {
+    title: 'Draft',
+    ingredients: [],
+  },
+})
+```
+
+The Gateway injects the accepted state into the DSH Session, registers the reserved `ag_ui_update_state` Tool in the exact Agent scope, and emits `STATE_SNAPSHOT`. The official client replaces `agent.state` when each snapshot arrives.
+
+The state Tool accepts:
+
+```json
+{
+  "state_updates": {
+    "recipe": {
+      "title": "Pasta Primavera"
+    }
+  }
+}
+```
+
+Updates use a shallow top-level merge: omitted top-level keys remain, while supplied nested values replace the previous nested value. The Gateway measures the complete merged state against `maxStateBytes`. It commits a model update and emits its snapshot only after DSH appends the durable `tool/result`; equal updates retain the Tool result but emit no redundant changed-state snapshot.
+
+Initial activation ignores the default empty state sent by clients that do not use shared state. After activation, later empty objects, arrays, or `null` are valid complete baselines. Omitting `state` retains the current thread state.
+
+Shared state is model/UI collaboration data. It never grants backend authority and should not replace an application's durable database state. `STATE_DELTA` is not implemented yet.
+
+## Dojo-compatible example
+
+The source-checkout-only keyless example exposes five standard feature paths through one private Gateway and a same-process BFF. The framework-free BFF plugin itself ships as the Loader subpath `dsh-ag-ui/dojo-host`; the scripted model and launcher remain source fixtures.
+
+```text
+/agentic_chat
+/backend_tool_rendering
+/shared_state
+/human_in_the_loop
+/tool_based_generative_ui
+```
+
+Start it with:
+
+```bash
+pnpm build
+HOST=0.0.0.0 PORT=8020 node examples/dojo/start.mjs
+```
+
+See [examples/dojo/README.md](examples/dojo/README.md) for client examples, the official upstream Dojo UI compatibility path, real-model Profile configuration, and security limitations. The built-package E2E drives all five paths through the real Cordis Loader and official `HttpAgent`.
 
 ## HTTP and run semantics
 
@@ -221,6 +268,7 @@ Do not send ordinary browser Tool results through AG-UI `resume[]`; that field i
 - Each run emits one `RUN_STARTED` and exactly one `RUN_FINISHED` or `RUN_ERROR`.
 - `runId` is an exact-request idempotency key. Completed identical requests replay retained events without driving DSH again.
 - One thread can have only one active HTTP run.
+- An active shared-state run emits its synchronization snapshot before model events.
 - V1 allows one frontend Tool call per DSH step.
 
 ## Client-provided Tools
@@ -228,10 +276,10 @@ Do not send ordinary browser Tool results through AG-UI `resume[]`; that field i
 Browser Tool names must match:
 
 ```text
-ui_[a-z][a-z0-9_]*
+[A-Za-z_][A-Za-z0-9_-]{0,63}
 ```
 
-Their parameters must use the object-rooted JSON Schema subset enforced by DSH Tools. The Gateway rejects collisions with inherited or global Tools and registers each accepted definition only in the exact Agent's Tool scope.
+This conservative subset follows common model-provider function-name limits; AG-UI itself does not require this exact regular expression. The name `ag_ui_update_state` is reserved for protocol shared state. Browser Tool parameters must use the object-rooted JSON Schema subset enforced by DSH Tools. The Gateway rejects collisions with inherited or global Tools and registers each accepted definition only in the exact Agent's Tool scope.
 
 Backend Tool results are emitted as `TOOL_CALL_RESULT`. Frontend Tool results are not echoed on the AG-UI wire because the browser already added the ToolMessage; DSH still records the real durable `tool/result`.
 
@@ -267,11 +315,25 @@ Conditional and retained. Every accepted normal or continuation run appends its 
 
 Append-only context preserves earlier reusable history. Changed current context adds a new suffix; provider cache availability is outside this package.
 
+### Shared application state
+
+#### What the model sees
+
+Once activated, the complete bounded state appears in a `Current Shared State` section and the reserved `ag_ui_update_state` Tool joins the Agent schema. A successful state update returns the complete merged state as a durable DSH Tool result.
+
+#### Token effect
+
+Conditional and retained. Every accepted run with active shared state appends the full state baseline. A model update additionally appends one Tool call/result pair containing the complete merged state.
+
+#### KV cache effect
+
+An unchanged earlier history remains reusable, but each current state baseline and changed Tool result adds a suffix. Large or frequently changing state reduces cache reuse and increases retained Session tokens.
+
 ### Client-provided capabilities
 
 #### What the model sees
 
-The current Agent-scoped `ui_*` definitions join the ordinary DSH Tool schema list. Their names, descriptions, and validated parameter schemas come from the authenticated client request; execution remains browser-owned.
+The current Agent-scoped browser Tool definitions join the ordinary DSH Tool schema list. Their names, descriptions, and validated parameter schemas come from the authenticated client request; execution remains browser-owned.
 
 #### Token effect
 
@@ -283,12 +345,13 @@ An unchanged Tool set preserves the Tool-schema prefix. Adding, removing, or cha
 
 ## Known limitations
 
-- Thread and run state is process-local.
-- Host restart does not call `agents.resume()` or recover a parked browser Tool.
+- Thread, run, and shared state is process-local.
+- Host restart does not call `agents.resume()`, recover a parked browser Tool, or restore shared state without a new client baseline.
 - Only text user input, assistant text, and string Tool results are adapted.
 - One frontend Tool call is allowed per DSH step.
 - Partial SSE reconnect is not supported.
-- AG-UI interrupt/HITL `resume[]`, multimodal messages, reasoning events, and state event families are not adapted yet.
+- `STATE_DELTA`, AG-UI interrupt/HITL `resume[]`, multimodal messages, reasoning events, and activity events are not adapted yet.
+- Shared-state updates use shallow top-level merge and do not provide versions, deep merge, or conflict resolution.
 
 ## Development
 
@@ -300,7 +363,7 @@ pnpm install
 pnpm check
 ```
 
-`pnpm check` runs lint, strict TypeScript checking, per-file coverage, runtime/type builds, and publint.
+`pnpm check` runs lint, strict TypeScript checking, per-file coverage, runtime/type builds, and publint. The Dojo fixture is intentionally source-checkout-only and is not included in the npm tarball.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution and release requirements.
 

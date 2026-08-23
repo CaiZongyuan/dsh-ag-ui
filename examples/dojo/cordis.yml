@@ -1,0 +1,38 @@
+- id: webserver
+  name: '@deepseek-ai/dsh-host-webserver'
+  config:
+    host: !!js process.env.HOST || '0.0.0.0'
+    port: !!js Number(process.env.PORT || 8020)
+
+- id: agent-spine
+  name: '@deepseek-ai/dsh-agent-spine-demo'
+  config:
+    workspaceContext: false
+    skills:
+      enabled: false
+    toolBash: false
+    toolJobs: false
+    includeHarnessIdentity: false
+    includeRuntimeContext: false
+    persona: You are the deterministic DSH AG-UI Dojo assistant.
+
+- id: scripted-model
+  name: './scripted-model.mjs'
+
+- id: ag-ui
+  name: '../../lib/index.js'
+  config:
+    provider: dojo-scripted
+    model: dojo-scripted
+    sharedSecret: !!js process.env.DSH_AG_UI_SHARED_SECRET
+    path: /_internal/ag-ui
+    allowNonLoopback: true
+    maxRunEvents: 256
+    maxRunEventBytes: 262144
+    frontendToolTimeoutMs: 10000
+    threadIdleMs: 60000
+
+- id: dojo-host
+  name: './dojo-host.mjs'
+  config:
+    debug: !!js process.env.DSH_AG_UI_DOJO_DEBUG === '1'

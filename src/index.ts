@@ -5,7 +5,7 @@
 
 import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { RunAgentInputSchema, type RunAgentInput } from '@ag-ui/core'
+import { EventType, RunAgentInputSchema, type RunAgentInput } from '@ag-ui/core'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -231,6 +231,7 @@ export class AgUiGateway extends Service implements AgUiAgentLookup {
       maxRunEvents: this.resolved.maxRunEvents,
       maxRunEventBytes: this.resolved.maxRunEventBytes,
       maxRunsPerThread: this.resolved.maxRunsPerThread,
+      maxStateBytes: this.resolved.maxStateBytes,
     }
     const binding = new ThreadBinding(this.ctx, principal, threadId, options, (expired) => {
       /* v8 ignore next -- one binding generation owns its idle timer; stale callbacks are contained defensively. */
@@ -296,6 +297,30 @@ function assertConfig(ctx: Context, config: Required<Config>): void {
     if ((name.startsWith('max') || name.endsWith('Ms')) && typeof value === 'number' && value <= 0) {
       throw new Error(`ag-ui: ${name} must be positive`)
     }
+  }
+  if (config.maxRunEvents < 2) throw new Error('ag-ui: maxRunEvents must retain opening and terminal events')
+  const longestId = 'x'.repeat(config.maxIdentityBytes)
+  const opening = {
+    type: EventType.RUN_STARTED,
+    threadId: longestId,
+    runId: longestId,
+    parentRunId: longestId,
+  }
+  const success = {
+    type: EventType.RUN_FINISHED,
+    threadId: longestId,
+    runId: longestId,
+    outcome: { type: 'success' },
+  }
+  const failure = {
+    type: EventType.RUN_ERROR,
+    code: 'AG_UI_EVENT_BUFFER_OVERFLOW',
+    message: 'The AG-UI run exceeded its event buffer.',
+  }
+  const mandatoryBytes = utf8Bytes(JSON.stringify(opening))
+    + Math.max(utf8Bytes(JSON.stringify(success)), utf8Bytes(JSON.stringify(failure)))
+  if (config.maxRunEventBytes < mandatoryBytes) {
+    throw new Error('ag-ui: maxRunEventBytes cannot retain mandatory opening and terminal events')
   }
 }
 

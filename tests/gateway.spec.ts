@@ -126,6 +126,84 @@ const PATCH_TOOL: Tool = {
 }
 
 describe('AG-UI Gateway', () => {
+  it('synchronizes shared state after the durable DSH Tool result', async () => {
+    const harness = await mount([
+      toolResponse('state-call', 'ag_ui_update_state', {
+        state_updates: {
+          recipe: { title: 'Pasta Primavera', ingredients: ['Pasta', 'Tomato'] },
+          status: 'ready',
+        },
+      }),
+      textResponse('The shared recipe is ready.'),
+    ])
+    const agent = new HttpAgent({ url: harness.url, headers: HEADERS, threadId: 'shared-state-thread' })
+    agent.setState({
+      recipe: { title: 'Draft', ingredients: ['Pasta'] },
+      status: 'draft',
+      tenantId: 'spoofed-tenant',
+    })
+    agent.addMessage({ id: 'state-user', role: 'user', content: 'Improve the shared recipe.' })
+    const events: BaseEvent[] = []
+
+    await agent.runAgent({ runId: 'state-run', tools: [], context: [], forwardedProps: {} }, {
+      onEvent: ({ event }) => { events.push(event) },
+    })
+
+    expect(events.map(event => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.STATE_SNAPSHOT,
+      EventType.STATE_SNAPSHOT,
+      EventType.TEXT_MESSAGE_START,
+      EventType.TEXT_MESSAGE_CONTENT,
+      EventType.TEXT_MESSAGE_END,
+      EventType.RUN_FINISHED,
+    ])
+    expect(agent.state).toEqual({
+      recipe: { title: 'Pasta Primavera', ingredients: ['Pasta', 'Tomato'] },
+      status: 'ready',
+      tenantId: 'spoofed-tenant',
+    })
+    expect(events.some(event => event.type === EventType.TOOL_CALL_START
+      || event.type === EventType.TOOL_CALL_RESULT)).toBe(false)
+    expect(harness.adapter.requests[0]?.messages.some(message => message.content.some(block =>
+      block.type === 'text' && block.text.includes('"title":"Draft"')))).toBe(true)
+    expect(harness.adapter.requests[0]?.tools.some(tool => tool.name === 'ag_ui_update_state')).toBe(true)
+    expect(harness.adapter.requests[1]?.messages.some(message => message.content.some(block =>
+      block.type === 'tool-result' && block.content.some(content =>
+        content.type === 'text' && content.text.includes('Pasta Primavera'))))).toBe(true)
+
+    const dshAgent = harness.ctx.agents.list()[0]
+    expect(dshAgent).toBeDefined()
+    expect(dshAgent?.session.events.filter(event => event.type === 'tool/call')).toHaveLength(1)
+    expect(dshAgent?.session.events.filter(event => event.type === 'tool/result')).toHaveLength(1)
+    expect(harness.ctx.agUi.identityFor(dshAgent as NonNullable<typeof dshAgent>)).toEqual({
+      principal: { tenantId: 'hospital-demo', userId: 'clinician-1' },
+      threadId: 'shared-state-thread',
+    })
+  })
+
+  it('records an unchanged shared-state Tool result without a redundant snapshot', async () => {
+    const harness = await mount([
+      toolResponse('state-unchanged-call', 'ag_ui_update_state', {
+        state_updates: { nested: { second: 2, first: 1 } },
+      }),
+      textResponse('The shared state is unchanged.'),
+    ])
+    const agent = new HttpAgent({ url: harness.url, headers: HEADERS, threadId: 'shared-state-unchanged' })
+    agent.setState({ status: 'draft', nested: { first: 1, second: 2 } })
+    agent.addMessage({ id: 'state-unchanged-user', role: 'user', content: 'Keep the state unchanged.' })
+    const events: BaseEvent[] = []
+
+    await agent.runAgent({ runId: 'state-unchanged-run', tools: [], context: [], forwardedProps: {} }, {
+      onEvent: ({ event }) => { events.push(event) },
+    })
+
+    expect(events.filter(event => event.type === EventType.STATE_SNAPSHOT)).toEqual([
+      { type: EventType.STATE_SNAPSHOT, snapshot: { status: 'draft', nested: { first: 1, second: 2 } } },
+    ])
+    expect(harness.ctx.agents.list()[0]?.session.events.filter(event => event.type === 'tool/result')).toHaveLength(1)
+  })
+
   it('parks one frontend Tool across two HTTP runs and resumes the same DSH turn', async () => {
     const harness = await mount([
       toolResponse('call-draft', PATCH_TOOL.name, {
@@ -250,7 +328,7 @@ describe('AG-UI Gateway', () => {
       messages: [{ id: 'user-text', role: 'user', content: 'Hello' }],
       tools: [],
       context: [],
-      state: {},
+      state: { value: 1 },
       forwardedProps: {},
     }
     const first = await post(harness.url, input)
@@ -259,6 +337,7 @@ describe('AG-UI Gateway', () => {
     expect(first.status).toBe(200)
     expect(replay.status).toBe(200)
     expect(replay.body).toBe(first.body)
+    expect(first.body).toContain('STATE_SNAPSHOT')
     expect(harness.adapter.requests).toHaveLength(1)
 
     const conflict = await post(harness.url, {

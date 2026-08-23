@@ -25,8 +25,9 @@ pnpm check
 - Own every registration, timer, Agent handle, pending call, and HTTP route through a Cordis fiber or an explicit lifecycle controller.
 - Treat request bodies, AG-UI messages, context, state, and client Tool schemas as untrusted wire input.
 - Never use client context, model arguments, or forwarded properties to grant backend authority.
-- Keep frontend Tool definitions in the exact Agent scope.
+- Keep frontend Tool definitions in the exact Agent scope and reserve `ag_ui_update_state` for protocol state management.
 - Record real DSH Tool results. Suppress only the duplicate AG-UI wire echo for browser-originated results.
+- Commit model-driven shared-state updates only after the durable DSH `tool/result` event exists.
 - Preserve one terminal event per HTTP run and one settlement owner per pending frontend call.
 - Add focused tests for every new success and failure path.
 

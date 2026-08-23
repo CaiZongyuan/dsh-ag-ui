@@ -134,6 +134,8 @@ describe('AG-UI configuration', () => {
     [{ sharedSecret: 'short' }, 'at least 16 UTF-8 bytes'],
     [{ maxThreads: 0 }, 'maxThreads must be positive'],
     [{ threadIdleMs: 0 }, 'threadIdleMs must be positive'],
+    [{ maxRunEvents: 1 }, 'maxRunEvents must retain opening and terminal events'],
+    [{ maxRunEventBytes: 1 }, 'maxRunEventBytes cannot retain mandatory opening and terminal events'],
   ] as const)('rejects invalid configuration %#', async (overrides, message) => {
     await expect(mount(overrides)).rejects.toThrow(message)
   })
@@ -210,6 +212,15 @@ describe('AG-UI HTTP validation', () => {
   ] as const)('applies the %s limit', async (_name, config, value, code) => {
     const { url } = await mount(config)
     expectCode(await post(url, value), 413, code)
+  })
+
+  it('measures the complete shared-state baseline in UTF-8 bytes', async () => {
+    const state = { value: 'é' }
+    const bytes = Buffer.byteLength(JSON.stringify(state))
+    const exact = await mount({ maxStateBytes: bytes })
+    expect((await post(exact.url, input({ state }))).status).toBe(200)
+    const oversized = await mount({ maxStateBytes: bytes - 1 })
+    expectCode(await post(oversized.url, input({ state })), 413, 'STATE_LIMIT_EXCEEDED')
   })
 
   it('rejects empty context and Tool descriptions and deep Tool schemas', async () => {

@@ -31,4 +31,4 @@ Deployments must:
 - prefer loopback binding between the BFF and Gateway
 - protect retained DSH Session context according to application data policy
 
-Client context, Tool arguments, `forwardedProps`, and request body identity fields are never authorization evidence.
+Client context, shared state, Tool arguments, `forwardedProps`, and request body identity fields are never authorization evidence. Shared state is collaboration data, not a durable business record or approval decision.
