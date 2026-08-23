@@ -102,7 +102,7 @@ export class RunController {
   }
 
   /**
-   * Stream queued events and close after the terminal event.
+   * Stream queued events to this Run\'s single live HTTP response and close after the terminal event.
    * @param response - Node response owning this SSE transport.
    */
   async writeTo(response: ServerResponse): Promise<void> {

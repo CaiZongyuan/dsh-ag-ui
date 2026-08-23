@@ -356,6 +356,10 @@ describe('ThreadBinding frontend Tools', () => {
       && event.data.message.content[0].isError === true
       && event.data.message.content[0].content.some(content => content.type === 'text'
         && content.text.includes('Invalid frontend Tool arguments')))).toBe(true)
+    expect(controller.record.events).toContainEqual(expect.objectContaining({
+      type: EventType.TOOL_CALL_RESULT,
+      toolCallId: 'call-invalid',
+    }))
   })
 
   it('times out a parked frontend Tool and settles the turn', async () => {
