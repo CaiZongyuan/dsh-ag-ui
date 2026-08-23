@@ -18,6 +18,20 @@ export const DOJO_TENANT_ID = 'dojo'
 export const DOJO_SHARED_SECRET = process.env.DSH_AG_UI_SHARED_SECRET
 if (!DOJO_SHARED_SECRET) throw new Error('DSH_AG_UI_SHARED_SECRET is required before loading the Dojo host.')
 
+export const INITIAL_RECIPE_STATE = {
+  recipe: {
+    title: 'Make Your Recipe',
+    skill_level: 'Intermediate',
+    cooking_time: '45 min',
+    special_preferences: [],
+    ingredients: [
+      { icon: '🥕', name: 'Carrots', amount: '3 large, grated' },
+      { icon: '🌾', name: 'All-Purpose Flour', amount: '2 cups' },
+    ],
+    instructions: ['Preheat oven to 350°F (175°C)'],
+  },
+}
+
 export const WEATHER_RESULT = {
   temperature: 20,
   conditions: 'sunny',

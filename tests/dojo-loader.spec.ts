@@ -223,13 +223,7 @@ async function verifyBackendTool(base: string): Promise<void> {
 
 async function verifySharedState(base: string): Promise<void> {
   const agent = new HttpAgent({ url: `${base}/shared_state`, threadId: 'dojo-state' })
-  agent.setState({
-    recipe: {
-      title: 'Draft',
-      ingredients: [{ icon: '🥕', name: 'Carrots', amount: '3' }],
-      instructions: ['Prepare the ingredients.'],
-    },
-  })
+  agent.setState({})
   await ask(agent, 'state-user-1', 'state-run-1', 'Create an Italian pasta recipe.', [])
   const state = agent.state as { recipe: { ingredients: Array<{ name: string }> } }
   expect(state.recipe.ingredients.map(item => item.name)).toContain('Pasta')

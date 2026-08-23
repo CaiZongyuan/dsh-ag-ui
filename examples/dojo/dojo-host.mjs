@@ -1,5 +1,5 @@
 import { once } from 'node:events'
-import { DOJO_FEATURES, DOJO_SHARED_SECRET, DOJO_TENANT_ID, FEATURE_CONTEXT_NAME, FEATURE_INSTRUCTIONS, WEATHER_RESULT } from './scenarios.mjs'
+import { DOJO_FEATURES, DOJO_SHARED_SECRET, DOJO_TENANT_ID, FEATURE_CONTEXT_NAME, FEATURE_INSTRUCTIONS, INITIAL_RECIPE_STATE, WEATHER_RESULT } from './scenarios.mjs'
 import { recordBackendToolCall, recordBffRun, resetScenarioState, scenarioSnapshot } from './scenario-state.mjs'
 
 const MAX_BODY_BYTES = 1024 * 1024
@@ -125,6 +125,9 @@ async function handleFeature(ctx, feature, request, response) {
     if (typeof input !== 'object' || input === null || Array.isArray(input)) {
       throw new Error('AG-UI input must be a JSON object.')
     }
+    if (feature === 'shared_state' && isEmptyObject(input.state)) {
+      input.state = structuredClone(INITIAL_RECIPE_STATE)
+    }
     const context = Array.isArray(input.context)
       ? input.context.filter(item => item?.description !== FEATURE_CONTEXT_NAME)
       : []
@@ -183,6 +186,11 @@ async function handleFeature(ctx, feature, request, response) {
   } finally {
     response.off('close', onClose)
   }
+}
+
+function isEmptyObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    && Object.keys(value).length === 0
 }
 
 async function readBody(request) {
