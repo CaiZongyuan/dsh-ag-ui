@@ -4,7 +4,8 @@ import { EventType, type BaseEvent, type RunAgentInput, type Tool } from '@ag-ui
 import { Context } from '@deepseek-ai/cordis'
 import type { Fiber } from '@deepseek-ai/cordis'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
-import { CallId, LlmAdapter, type GenerateOptions, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { StreamChunk } from '@deepseek-ai/dsh-llm'
+import { ScriptedAdapter, textResponse, toolResponse } from './scripted-adapter.ts'
 import { mountTestSpine } from './spine.ts'
 import AgUiGateway from 'dsh-ag-ui'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
@@ -14,49 +15,6 @@ const HEADERS = {
   authorization: `Bearer ${SECRET}`,
   'x-dsh-tenant-id': 'hospital-demo',
   'x-dsh-user-id': 'clinician-1',
-}
-
-/** Scripted model replacing only the nondeterministic provider boundary. */
-class ScriptedAdapter extends LlmAdapter {
-  readonly requests: GenerateOptions[] = []
-
-  constructor(private readonly script: StreamChunk[][]) {
-    super()
-  }
-
-  override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
-    return Promise.resolve({ provider, id: model, name: model })
-  }
-
-  async *stream(request: GenerateOptions): AsyncIterable<StreamChunk> {
-    this.requests.push(request)
-    const response = this.script.shift()
-    if (response === undefined) throw new Error('scripted AG-UI adapter exhausted')
-    for (const chunk of response) yield chunk
-  }
-}
-
-function textResponse(text: string): StreamChunk[] {
-  return [
-    { type: 'block-start', index: 0, blockType: 'text' },
-    { type: 'text-delta', index: 0, text },
-    { type: 'block-end', index: 0, block: { type: 'text', text } },
-    { type: 'finish', reason: { kind: 'stop' } },
-  ]
-}
-
-function toolResponse(callId: string, name: string, args: object): StreamChunk[] {
-  const encoded = JSON.stringify(args)
-  return [
-    { type: 'block-start', index: 0, blockType: 'tool-call' },
-    { type: 'tool-call-delta', index: 0, id: CallId(callId), name, argumentsDelta: encoded },
-    {
-      type: 'block-end',
-      index: 0,
-      block: { type: 'tool-call', id: CallId(callId), name, arguments: encoded },
-    },
-    { type: 'finish', reason: { kind: 'tool-calls' } },
-  ]
 }
 
 interface Harness {

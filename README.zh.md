@@ -240,26 +240,7 @@ Shared state 是 model/UI collaboration data。它永远不授予 backend author
 
 ## Dojo-compatible example
 
-仅 source checkout 提供的 keyless example 通过一个 private Gateway 和同进程 BFF 暴露五个标准 feature paths。Framework-free BFF plugin 本身通过 Loader subpath `dsh-ag-ui/dojo-host` 发布；scripted model 与 launcher 仍是 source fixtures。
-
-```text
-/agentic_chat
-/backend_tool_rendering
-/shared_state
-/human_in_the_loop
-/tool_based_generative_ui
-```
-
-在 AG-UI 接受独立 DSH registry entry 之前，本地 upstream Dojo 测试会暂时复用 Claude Agent SDK TypeScript 菜单 entry，仅作为 URL/path alias。该过程不使用 Claude runtime、model 或 credential；准确说明见 example README。
-
-启动命令：
-
-```bash
-pnpm build
-HOST=0.0.0.0 PORT=8020 node examples/dojo/start.mjs
-```
-
-Client example、官方 upstream Dojo UI 兼容路径、real-model Profile 配置与安全限制见 [examples/dojo/README.md](examples/dojo/README.md)。Built-package E2E 使用真实 Cordis Loader 和官方 `HttpAgent` 驱动全部五个 paths。
+Package 以 `dsh-ag-ui/dojo-host` 发布 framework-free BFF plugin。Keyless scripted model、launcher 和五项 feature suite 仍是仅供 source checkout 使用的 fixtures。命令、routes、upstream Dojo 兼容方式、real-model 配置与安全限制见 [examples/dojo/README.zh.md](examples/dojo/README.zh.md)。
 
 ## HTTP 与 run 语义
 

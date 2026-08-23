@@ -46,10 +46,14 @@ interface AcceptedMessage {
 }
 
 interface FrontendToolRegistration {
-  readonly definition: ToolDefinition
   readonly dispose: () => void
   readonly fingerprint: string
-  readonly schema: ObjectJsonSchema & Record<string, unknown>
+}
+
+interface PendingFrontendCall {
+  readonly turn: number
+  resolve(value: string): void
+  reject(error: Error): void
 }
 
 interface ToolCallPosition {
@@ -58,14 +62,10 @@ interface ToolCallPosition {
   readonly name: string
 }
 
-interface PendingFrontendCall {
-  readonly callId: string
-  readonly turn: number
-  readonly step: number
-  readonly name: string
-  resolve(value: string): void
-  reject(error: Error): void
-}
+type ToolCallLifecycle =
+  | ({ readonly kind: 'backend' } & ToolCallPosition)
+  | ({ readonly kind: 'frontend'; readonly parked: true } & ToolCallPosition)
+  | ({ readonly kind: 'state'; commit?: PendingStateCommit } & ToolCallPosition)
 
 interface TextProjection {
   readonly messageId: string
@@ -98,24 +98,20 @@ export class ThreadBinding {
   private handle: AgentHandle | undefined
   private agent: Agent | undefined
   private disposed = false
-  private generation = 0
   private activeRun: RunController | undefined
   private idleTimer: ReturnType<typeof setTimeout> | undefined
   private readonly acceptedMessages = new Map<string, AcceptedMessage>()
   private readonly frontendTools = new Map<string, FrontendToolRegistration>()
   private stagedTools: AgUiTool[] | undefined
   private readonly pendingCalls = new Map<string, PendingFrontendCall>()
-  private readonly frontendCallIds = new Set<string>()
   private readonly serverResultCallIds = new Set<string>()
   private readonly runLedger = new Map<string, RunRecord>()
-  private readonly callPositions = new Map<string, ToolCallPosition>()
+  private readonly toolCallLifecycles = new Map<string, ToolCallLifecycle>()
   private readonly frontendSteps = new Set<string>()
   private readonly text = new Map<string, TextProjection>()
   private sharedState: unknown
   private sharedStateActive = false
   private stateToolDispose: (() => void) | undefined
-  private readonly stateCallIds = new Set<string>()
-  private readonly pendingStateCommits = new Map<string, PendingStateCommit>()
 
   constructor(
     private readonly ctx: Context,
@@ -204,7 +200,6 @@ export class ThreadBinding {
     const record: RunRecord = { digest, events: [], state: 'active', bytes: 0 }
     this.runLedger.set(input.runId, record)
     const controller = new RunController(
-      ++this.generation,
       input,
       record,
       this.options.maxRunEvents,
@@ -302,8 +297,7 @@ export class ThreadBinding {
     this.stateToolDispose = undefined
     this.sharedState = undefined
     this.sharedStateActive = false
-    this.stateCallIds.clear()
-    this.pendingStateCommits.clear()
+    this.toolCallLifecycles.clear()
     for (const registration of this.frontendTools.values()) registration.dispose()
     this.frontendTools.clear()
     const handle = this.handle
@@ -457,8 +451,9 @@ export class ThreadBinding {
   private prepareSharedStateUpdate(args: unknown, exec: ToolRunContext): string {
     if (!this.sharedStateActive) throw new Error('Shared state is not active for this AG-UI thread')
     const callId = String(exec.callId)
-    if (!this.stateCallIds.has(callId)) throw new Error('Shared-state update has no DSH call position')
-    if (this.pendingStateCommits.has(callId)) throw new Error('Shared-state update is already pending')
+    const lifecycle = this.toolCallLifecycles.get(callId)
+    if (lifecycle?.kind !== 'state') throw new Error('Shared-state update has no DSH call position')
+    if (lifecycle.commit !== undefined) throw new Error('Shared-state update is already pending')
     const updates = readStateUpdates(args)
     const current = this.sharedState
     const next = isUnknownRecord(current)
@@ -474,7 +469,7 @@ export class ThreadBinding {
       if (active === undefined) throw new Error('Shared-state update has no active AG-UI run')
       active.assertCanEmit({ type: EventType.STATE_SNAPSHOT, snapshot: next })
     }
-    this.pendingStateCommits.set(callId, { value: structuredClone(next), changed })
+    lifecycle.commit = { value: structuredClone(next), changed }
     return JSON.stringify({ status: changed ? 'updated' : 'unchanged', state: next })
   }
 
@@ -516,10 +511,8 @@ export class ThreadBinding {
       const definition = this.definitionFor(item)
       const dispose = this.liveAgent.ctx.tools.register(definition)
       this.frontendTools.set(item.tool.name, {
-        definition,
         dispose,
         fingerprint: item.fingerprint,
-        schema: item.schema,
       })
     }
   }
@@ -548,13 +541,15 @@ export class ThreadBinding {
   ): Promise<string> {
     const violations = validateJsonSchemaValue(schema, args, '')
     if (violations.length > 0) throw new Error(`Invalid frontend Tool arguments: ${violations.join('; ')}`)
-    const position = this.callPositions.get(String(exec.callId))
-    if (position === undefined || position.name !== name) throw new Error('Frontend Tool call has no DSH call position')
+    const callId = String(exec.callId)
+    const lifecycle = this.toolCallLifecycles.get(callId)
+    if (lifecycle?.kind !== 'backend' || lifecycle.name !== name) throw new Error('Frontend Tool call has no DSH call position')
     const active = this.activeRun
-    if (active === undefined || active.turn !== position.turn) throw new Error('Frontend Tool call has no active AG-UI run')
-    const stepKey = `${String(position.turn)}:${String(position.step)}`
+    if (active === undefined || active.turn !== lifecycle.turn) throw new Error('Frontend Tool call has no active AG-UI run')
+    const stepKey = `${String(lifecycle.turn)}:${String(lifecycle.step)}`
     if (this.frontendSteps.has(stepKey)) throw new Error('Only one frontend Tool call is allowed per DSH step')
     this.frontendSteps.add(stepKey)
+    this.toolCallLifecycles.set(callId, { ...lifecycle, kind: 'frontend', parked: true })
 
     const deferred = Promise.withResolvers<string>()
     let settled = false
@@ -564,15 +559,12 @@ export class ThreadBinding {
       settled = true
       clearTimeout(timer)
       exec.signal.removeEventListener('abort', onAbort)
-      this.pendingCalls.delete(String(exec.callId))
+      this.pendingCalls.delete(callId)
       operation()
       if (this.activeRun === undefined && this.pendingCalls.size === 0) this.scheduleIdleExpiry()
     }
     const pending: PendingFrontendCall = {
-      callId: String(exec.callId),
-      turn: position.turn,
-      step: position.step,
-      name,
+      turn: lifecycle.turn,
       resolve: (value) => { settle(() => { deferred.resolve(value) }) },
       reject: (error) => { settle(() => { deferred.reject(error) }) },
     }
@@ -585,8 +577,7 @@ export class ThreadBinding {
       }
     }, this.options.frontendToolTimeoutMs)
     exec.signal.addEventListener('abort', onAbort, { once: true })
-    this.pendingCalls.set(pending.callId, pending)
-    this.frontendCallIds.add(pending.callId)
+    this.pendingCalls.set(callId, pending)
     active.success()
     return deferred.promise
   }
@@ -637,15 +628,13 @@ export class ThreadBinding {
       }
       case 'tool/call': {
         const callId = String(event.data.callId)
-        this.callPositions.set(callId, {
+        this.toolCallLifecycles.set(callId, {
+          kind: event.data.name === STATE_TOOL_NAME ? 'state' : 'backend',
           turn: event.data.turn,
           step: event.data.step,
           name: event.data.name,
         })
-        if (event.data.name === STATE_TOOL_NAME) {
-          this.stateCallIds.add(callId)
-          break
-        }
+        if (event.data.name === STATE_TOOL_NAME) break
         active.emit({
           type: EventType.TOOL_CALL_START,
           toolCallId: callId,
@@ -659,17 +648,17 @@ export class ThreadBinding {
       case 'tool/result': {
         const block = event.data.message.content[0]
         const callId = String(block.toolCallId)
-        if (this.stateCallIds.delete(callId)) {
-          const commit = this.pendingStateCommits.get(callId)
-          this.pendingStateCommits.delete(callId)
+        const lifecycle = this.toolCallLifecycles.get(callId)
+        this.toolCallLifecycles.delete(callId)
+        if (lifecycle?.kind === 'state') {
+          const commit = lifecycle.commit
           if (commit !== undefined && !block.isError && commit.changed) {
             this.sharedState = structuredClone(commit.value)
             active.emit({ type: EventType.STATE_SNAPSHOT, snapshot: structuredClone(commit.value) })
           }
-          this.callPositions.delete(callId)
           break
         }
-        if (!this.frontendCallIds.has(callId)) {
+        if (lifecycle?.kind !== 'frontend') {
           this.serverResultCallIds.add(callId)
           active.emit({
             type: EventType.TOOL_CALL_RESULT,
@@ -679,12 +668,10 @@ export class ThreadBinding {
             role: 'tool',
           })
         }
-        this.callPositions.delete(callId)
         break
       }
       case 'turn/end': {
-        this.clearStateCallsForTurn(event.data.turn)
-        this.frontendCallIds.clear()
+        this.clearToolCallsForTurn(event.data.turn)
         switch (event.data.reason.kind) {
           case 'completed':
           case 'max-tokens':
@@ -712,12 +699,9 @@ export class ThreadBinding {
     }
   }
 
-  private clearStateCallsForTurn(turn: number): void {
-    for (const callId of this.stateCallIds) {
-      if (this.callPositions.get(callId)?.turn !== turn) continue
-      this.stateCallIds.delete(callId)
-      this.pendingStateCommits.delete(callId)
-      this.callPositions.delete(callId)
+  private clearToolCallsForTurn(turn: number): void {
+    for (const [callId, lifecycle] of this.toolCallLifecycles) {
+      if (lifecycle.turn === turn) this.toolCallLifecycles.delete(callId)
     }
   }
 

@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - Browser Tool names now accept standard AG-UI-compatible ASCII identifiers while reserving the internal state Tool name.
+- Consolidated internal Tool-call and Run-event bookkeeping and removed redundant source fixtures without changing protocol behavior.
 
 ## [0.1.0] - 2026-08-22
 

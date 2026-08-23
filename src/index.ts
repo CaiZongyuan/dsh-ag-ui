@@ -234,7 +234,7 @@ export class AgUiGateway extends Service implements AgUiAgentLookup {
       maxStateBytes: this.resolved.maxStateBytes,
     }
     const binding = new ThreadBinding(this.ctx, principal, threadId, options, (expired) => {
-      /* v8 ignore next -- one binding generation owns its idle timer; stale callbacks are contained defensively. */
+      /* v8 ignore next -- one binding instance owns its idle timer; stale callbacks are contained defensively. */
       if (this.bindings.get(key) !== expired) return
       this.bindings.delete(key)
       this.owners.delete(expired.liveAgent)

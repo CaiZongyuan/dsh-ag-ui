@@ -1,6 +1,6 @@
 import { once } from 'node:events'
 import { DOJO_FEATURES, DOJO_SHARED_SECRET, DOJO_TENANT_ID, FEATURE_CONTEXT_NAME, FEATURE_INSTRUCTIONS, INITIAL_RECIPE_STATE, WEATHER_RESULT } from './scenarios.mjs'
-import { recordBackendToolCall, recordBffRun, resetScenarioState, scenarioSnapshot } from './scenario-state.mjs'
+import { resetScenarioState, scenarioSnapshot } from './scenario-state.mjs'
 
 const MAX_BODY_BYTES = 1024 * 1024
 
@@ -75,15 +75,6 @@ export function apply(ctx, config = {}) {
         || identity.principal.userId !== 'dojo:backend_tool_rendering') {
         throw new Error('The authenticated Dojo feature cannot access the weather Tool.')
       }
-      const location = typeof args === 'object' && args !== null && 'location' in args
-        && typeof args.location === 'string' ? args.location : 'unknown'
-      recordBackendToolCall({
-        feature: 'backend_tool_rendering',
-        threadId: identity.threadId,
-        name: 'get_weather',
-        args: { location },
-        result: WEATHER_RESULT,
-      })
       return structuredClone(WEATHER_RESULT)
     },
   }), 'dojo.weatherTool')
@@ -135,8 +126,6 @@ async function handleFeature(ctx, feature, request, response) {
       description: FEATURE_CONTEXT_NAME,
       value: `${feature}\n${FEATURE_INSTRUCTIONS[feature]}`,
     }, ...context]
-    recordBffRun(feature)
-
     const upstream = await fetch(`http://127.0.0.1:${String(ctx.webServer.port)}/_internal/ag-ui`, {
       method: 'POST',
       headers: {

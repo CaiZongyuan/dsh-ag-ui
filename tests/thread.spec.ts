@@ -1,30 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventType, type RunAgentInput, type Tool } from '@ag-ui/core'
 import { Context } from '@deepseek-ai/cordis'
-import { CallId, createAssistantMessage, createToolResultMessage, LlmAdapter, type GenerateOptions, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { CallId, createAssistantMessage, createToolResultMessage, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { ScriptedAdapter, textResponse, toolResponse as scriptedToolResponse } from './scripted-adapter.ts'
 import { mountTestSpine } from './spine.ts'
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { ThreadBinding, type ThreadOptions } from '../src/thread.ts'
-
-class ScriptedAdapter extends LlmAdapter {
-  readonly requests: GenerateOptions[] = []
-
-  constructor(private readonly script: StreamChunk[][]) {
-    super()
-  }
-
-  override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
-    return Promise.resolve({ provider, id: model, name: model })
-  }
-
-  async *stream(request: GenerateOptions): AsyncIterable<StreamChunk> {
-    this.requests.push(request)
-    const response = this.script.shift()
-    if (response === undefined) throw new Error('script exhausted')
-    for (const chunk of response) yield chunk
-  }
-}
 
 const contexts: Context[] = []
 
@@ -55,23 +37,8 @@ const OPTIONS: ThreadOptions = {
   maxStateBytes: 64 * 1024,
 }
 
-function textResponse(text: string): StreamChunk[] {
-  return [
-    { type: 'block-start', index: 0, blockType: 'text' },
-    { type: 'text-delta', index: 0, text },
-    { type: 'block-end', index: 0, block: { type: 'text', text } },
-    { type: 'finish', reason: { kind: 'stop' } },
-  ]
-}
-
 function toolResponse(callId: string, args: object): StreamChunk[] {
-  const encoded = JSON.stringify(args)
-  return [
-    { type: 'block-start', index: 0, blockType: 'tool-call' },
-    { type: 'tool-call-delta', index: 0, id: CallId(callId), name: TOOL.name, argumentsDelta: encoded },
-    { type: 'block-end', index: 0, block: { type: 'tool-call', id: CallId(callId), name: TOOL.name, arguments: encoded } },
-    { type: 'finish', reason: { kind: 'tool-calls' } },
-  ]
+  return scriptedToolResponse(callId, TOOL.name, args)
 }
 
 async function mount(script: StreamChunk[][] = [textResponse('ok')], overrides: Partial<ThreadOptions> = {}) {
@@ -111,30 +78,36 @@ async function settle(controller: ReturnType<ThreadBinding['reserveRun']>): Prom
 }
 
 interface TestPendingCall {
-  callId: string
   turn: number
-  step: number
-  name: string
   resolve(value: string): void
   reject(error: Error): void
 }
+
+interface TestToolCallPosition {
+  turn: number
+  step: number
+  name: string
+}
+
+type TestToolCallLifecycle =
+  | ({ kind: 'backend' } & TestToolCallPosition)
+  | ({ kind: 'frontend'; parked: true } & TestToolCallPosition)
+  | ({ kind: 'state'; commit?: { value: unknown; changed: boolean } } & TestToolCallPosition)
 
 interface ThreadBindingInternals {
   activeRun: ReturnType<ThreadBinding['reserveRun']> | undefined
   pendingCalls: Map<string, TestPendingCall>
   runLedger: Map<string, { digest: string; events: []; state: 'active' | 'completed'; bytes: number }>
-  callPositions: Map<string, { turn: number; step: number; name: string }>
+  toolCallLifecycles: Map<string, TestToolCallLifecycle>
   frontendSteps: Set<string>
   sharedState: unknown
   sharedStateActive: boolean
-  stateCallIds: Set<string>
-  pendingStateCommits: Map<string, { value: unknown; changed: boolean }>
   applyFrontendTools(tools: Tool[]): void
   continuationTurn(messages: Extract<RunAgentInput['messages'][number], { role: 'tool' }>[]): number
   definitionFor(item: { tool: Tool; fingerprint: string; schema: Tool['parameters'] }): ToolDefinition
   parkFrontendTool(name: string, schema: Tool['parameters'], args: unknown, exec: ToolRunContext): Promise<string>
   prepareSharedStateUpdate(args: unknown, exec: ToolRunContext): string
-  clearStateCallsForTurn(turn: number): void
+  clearToolCallsForTurn(turn: number): void
   onSessionEvent(event: SessionEvent): void
   onAgentError(error: unknown): void
 }
@@ -254,8 +227,8 @@ describe('ThreadBinding run admission', () => {
     expect(() => state.continuationTurn([
       { id: 'missing', role: 'tool', toolCallId: 'missing', content: 'x' },
     ])).toThrow('no pending call')
-    state.pendingCalls.set('call-1', { callId: 'call-1', turn: 1, step: 1, name: TOOL.name, resolve() {}, reject() {} })
-    state.pendingCalls.set('call-2', { callId: 'call-2', turn: 2, step: 1, name: TOOL.name, resolve() {}, reject() {} })
+    state.pendingCalls.set('call-1', { turn: 1, resolve() {}, reject() {} })
+    state.pendingCalls.set('call-2', { turn: 2, resolve() {}, reject() {} })
     expect(() => state.continuationTurn([
       { id: 'result-1', role: 'tool', toolCallId: 'call-1', content: 'one' },
       { id: 'result-2', role: 'tool', toolCallId: 'call-2', content: 'two' },
@@ -475,8 +448,7 @@ describe('ThreadBinding shared state', () => {
       sharedState: undefined,
       sharedStateActive: false,
     })
-    expect(internals(binding).stateCallIds.size).toBe(0)
-    expect(internals(binding).pendingStateCommits.size).toBe(0)
+    expect(internals(binding).toolCallLifecycles.size).toBe(0)
   })
 
   it('rejects oversized baselines and inherited reserved Tool collisions', async () => {
@@ -579,7 +551,9 @@ describe('ThreadBinding shared state', () => {
       callId: CallId('inactive-state-call'),
       signal: new AbortController().signal,
     } as ToolRunContext
-    inactiveState.stateCallIds.add('inactive-state-call')
+    inactiveState.toolCallLifecycles.set('inactive-state-call', {
+      kind: 'state', turn: 1, step: 1, name: 'ag_ui_update_state',
+    })
     expect(() => inactiveState.prepareSharedStateUpdate({ state_updates: {} }, inactiveExec))
       .toThrow('Shared state is not active')
 
@@ -597,11 +571,14 @@ describe('ThreadBinding shared state', () => {
     const exec = { callId: CallId('state-private-call'), signal } as ToolRunContext
     expect(() => state.prepareSharedStateUpdate({ state_updates: { value: 2 } }, exec))
       .toThrow('no DSH call position')
-    state.stateCallIds.add('state-private-call')
+    const stateLifecycle: Extract<TestToolCallLifecycle, { kind: 'state' }> = {
+      kind: 'state', turn: 1, step: 1, name: 'ag_ui_update_state',
+    }
+    state.toolCallLifecycles.set('state-private-call', stateLifecycle)
     expect(() => state.prepareSharedStateUpdate({}, exec)).toThrow('state_updates object')
     expect(() => state.prepareSharedStateUpdate({ state_updates: { value: 'x'.repeat(40) } }, exec))
       .toThrow('exceeds the configured state byte limit')
-    state.pendingStateCommits.set('state-private-call', { value: { value: 2 }, changed: true })
+    stateLifecycle.commit = { value: { value: 2 }, changed: true }
     expect(() => state.prepareSharedStateUpdate({ state_updates: { value: 2 } }, exec))
       .toThrow('already pending')
 
@@ -615,7 +592,9 @@ describe('ThreadBinding shared state', () => {
       signal,
     } as ToolRunContext
     state.sharedState = 'scalar'
-    state.stateCallIds.add('state-scalar-call')
+    state.toolCallLifecycles.set('state-scalar-call', {
+      kind: 'state', turn: 1, step: 1, name: 'ag_ui_update_state',
+    })
     expect(JSON.parse(state.prepareSharedStateUpdate({ state_updates: { value: 3 } }, scalarExec)))
       .toMatchObject({ state: { value: 3 } })
     stateController.error('TEST_DONE', 'done')
@@ -632,14 +611,17 @@ describe('ThreadBinding shared state', () => {
     await binding.liveAgent.whenIdle()
 
     const state = internals(binding)
-    state.stateCallIds.add('other-turn-call')
-    state.callPositions.set('other-turn-call', { turn: 2, step: 1, name: 'ag_ui_update_state' })
-    state.pendingStateCommits.set('other-turn-call', { value: { value: 2 }, changed: true })
-    state.clearStateCallsForTurn(1)
-    expect(state.stateCallIds.has('other-turn-call')).toBe(true)
-    state.clearStateCallsForTurn(2)
-    expect(state.stateCallIds.has('other-turn-call')).toBe(false)
-    expect(state.pendingStateCommits.has('other-turn-call')).toBe(false)
+    state.toolCallLifecycles.set('other-turn-call', {
+      kind: 'state',
+      turn: 2,
+      step: 1,
+      name: 'ag_ui_update_state',
+      commit: { value: { value: 2 }, changed: true },
+    })
+    state.clearToolCallsForTurn(1)
+    expect(state.toolCallLifecycles.has('other-turn-call')).toBe(true)
+    state.clearToolCallsForTurn(2)
+    expect(state.toolCallLifecycles.has('other-turn-call')).toBe(false)
 
     const second = binding.reserveRun(input(
       'state-late-2',
@@ -671,11 +653,11 @@ describe('ThreadBinding defensive Tool execution', () => {
     const signal = new AbortController().signal
     const exec = { callId: CallId('private-call'), signal } as ToolRunContext
     expect(() => state.parkFrontendTool(TOOL.name, TOOL.parameters, { value: 'x' }, exec)).toThrow('no DSH call position')
-    state.callPositions.set('private-call', { turn: 1, step: 1, name: 'different' })
+    state.toolCallLifecycles.set('private-call', { kind: 'backend', turn: 1, step: 1, name: 'different' })
     expect(() => state.parkFrontendTool(TOOL.name, TOOL.parameters, { value: 'x' }, exec)).toThrow('no DSH call position')
-    state.callPositions.set('private-call', { turn: 2, step: 1, name: TOOL.name })
+    state.toolCallLifecycles.set('private-call', { kind: 'backend', turn: 2, step: 1, name: TOOL.name })
     expect(() => state.parkFrontendTool(TOOL.name, TOOL.parameters, { value: 'x' }, exec)).toThrow('no active AG-UI run')
-    state.callPositions.set('private-call', { turn: 1, step: 1, name: TOOL.name })
+    state.toolCallLifecycles.set('private-call', { kind: 'backend', turn: 1, step: 1, name: TOOL.name })
     state.frontendSteps.add('1:1')
     expect(() => state.parkFrontendTool(TOOL.name, TOOL.parameters, { value: 'x' }, exec)).toThrow('Only one frontend Tool call')
     controller.error('TEST_DONE', 'done')
@@ -687,7 +669,7 @@ describe('ThreadBinding defensive Tool execution', () => {
     const controller = binding.reserveRun(input('run-abort', [{ id: 'message-abort', role: 'user', content: 'hello' }]), 'digest-abort')
     controller.turn = 1
     const abort = new AbortController()
-    state.callPositions.set('abort-call', { turn: 1, step: 1, name: TOOL.name })
+    state.toolCallLifecycles.set('abort-call', { kind: 'backend', turn: 1, step: 1, name: TOOL.name })
     const parked = state.parkFrontendTool(TOOL.name, TOOL.parameters, { value: 'x' }, { callId: CallId('abort-call'), signal: abort.signal } as ToolRunContext)
     abort.abort()
     state.pendingCalls.get('abort-call')?.resolve('late')

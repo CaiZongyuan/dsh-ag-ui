@@ -85,7 +85,7 @@ describe('AG-UI errors', () => {
 describe('AG-UI run buffering', () => {
   it('terminates with overflow before exceeding the event count bound', async () => {
     const ledger = record()
-    const controller = new RunController(1, INPUT, ledger, 2, 10_000)
+    const controller = new RunController(INPUT, ledger, 2, 10_000)
     controller.start()
     controller.emit({ type: EventType.RAW, event: { one: true } })
     await controller.done
@@ -104,7 +104,7 @@ describe('AG-UI run buffering', () => {
       message: 'The AG-UI run exceeded its event buffer.',
     } as BaseEvent
     const maxBytes = utf8Bytes(JSON.stringify(terminal))
-    const controller = new RunController(1, INPUT, ledger, 10, maxBytes)
+    const controller = new RunController(INPUT, ledger, 10, maxBytes)
     controller.emit({ type: EventType.RAW, event: { too: 'large' } })
     await controller.done
     expect(ledger.events).toEqual([terminal])
@@ -130,7 +130,7 @@ describe('AG-UI run buffering', () => {
     const terminal = successIsLargest ? success : failure
     const maxBytes = [opening, data, terminal]
       .reduce((total, event) => total + utf8Bytes(JSON.stringify(event)), 0)
-    const controller = new RunController(1, INPUT, ledger, 3, maxBytes)
+    const controller = new RunController(INPUT, ledger, 3, maxBytes)
     controller.start()
     controller.emit(data)
     if (successIsLargest) controller.success()
@@ -142,27 +142,42 @@ describe('AG-UI run buffering', () => {
 
   it('falls back to a bounded terminal error and rejects impossible opening bounds', async () => {
     const ledger = record()
-    const controller = new RunController(1, INPUT, ledger, 2, 10_000)
+    const controller = new RunController(INPUT, ledger, 2, 10_000)
     controller.start()
     controller.error('X'.repeat(20_000), 'Y'.repeat(20_000))
     await controller.done
     expect(ledger.events.at(-1)).toMatchObject({ code: 'AG_UI_EVENT_BUFFER_OVERFLOW' })
     expect(ledger.bytes).toBeLessThanOrEqual(10_000)
 
-    expect(() => new RunController(1, INPUT, record(), 1, 10_000).start())
+    expect(() => new RunController(INPUT, record(), 1, 10_000).start())
       .toThrow('cannot retain mandatory events')
-    expect(() => new RunController(1, INPUT, record(), 2, 1).start())
+    expect(() => new RunController(INPUT, record(), 2, 1).start())
       .toThrow('cannot retain mandatory events')
   })
 
-  it('streams queued events through response backpressure and ends once', async () => {
+  it('streams events appended before the writer starts through backpressure', async () => {
     const ledger = record()
-    const controller = new RunController(1, INPUT, ledger, 10, 10_000)
-    const sink = new FakeResponse()
-    sink.backpressure = true
-    const writing = controller.writeTo(response(sink))
+    const controller = new RunController(INPUT, ledger, 10, 10_000)
     controller.start()
     controller.error('FAIL', 'failed')
+    const sink = new FakeResponse()
+    sink.backpressure = true
+    await Promise.all([controller.done, controller.writeTo(response(sink))])
+    expect(sink.chunks).toHaveLength(2)
+    expect(sink.writableEnded).toBe(true)
+  })
+
+  it('wakes the waiting writer for appended and terminal events', async () => {
+    const ledger = record()
+    const controller = new RunController(INPUT, ledger, 10, 10_000)
+    const sink = new FakeResponse()
+    const writing = controller.writeTo(response(sink))
+    await Promise.resolve()
+    expect(sink.chunks).toEqual([])
+    controller.start()
+    await Promise.resolve()
+    expect(sink.chunks).toHaveLength(1)
+    controller.success()
     await Promise.all([controller.done, writing])
     expect(sink.chunks).toHaveLength(2)
     expect(sink.writableEnded).toBe(true)
@@ -170,7 +185,7 @@ describe('AG-UI run buffering', () => {
 
   it('does not write queued events to an already destroyed response', async () => {
     const ledger = record()
-    const controller = new RunController(1, INPUT, ledger, 10, 10_000)
+    const controller = new RunController(INPUT, ledger, 10, 10_000)
     controller.start()
     controller.success()
     const sink = new FakeResponse()

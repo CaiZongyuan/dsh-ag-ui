@@ -1,6 +1,8 @@
 import { CallId, LlmAdapter } from '@deepseek-ai/dsh-llm'
-import { recordAbortedRequest, recordModelRequest } from './scenario-state.mjs'
+import { recordAbortedRequest } from './scenario-state.mjs'
 import { FEATURE_CONTEXT_NAME } from './scenarios.mjs'
+
+let callSequence = 0
 
 class DojoScriptedAdapter extends LlmAdapter {
   resolveModel(provider, model) {
@@ -10,32 +12,31 @@ class DojoScriptedAdapter extends LlmAdapter {
   async *stream(request) {
     const serialized = JSON.stringify(request.messages)
     const feature = readFeature(request.messages)
-    const requestNumber = recordModelRequest(feature)
     const latestUser = readLatestUserText(request.messages)
     if (/wait for disconnect/i.test(latestUser)) {
       await waitForAbort(request.signal)
       recordAbortedRequest(feature)
       return
     }
-    const response = responseFor(feature, requestNumber, latestUser, serialized, request.messages)
+    const response = responseFor(feature, latestUser, serialized, request.messages)
     for (const chunk of response) yield chunk
   }
 }
 
-function responseFor(feature, requestNumber, latestUser, serialized, messages) {
+function responseFor(feature, latestUser, serialized, messages) {
   switch (feature) {
     case 'agentic_chat':
       return text(chatResponse(latestUser, serialized))
     case 'backend_tool_rendering':
       return serialized.includes('temperature') && serialized.includes('sunny')
         ? text('The weather lookup completed successfully.')
-        : toolCall(`weather-${requestNumber}`, 'get_weather', { location: 'San Francisco' })
+        : toolCall(nextCallId('weather'), 'get_weather', { location: 'San Francisco' })
     case 'shared_state':
-      return sharedStateResponse(requestNumber, latestUser, serialized, messages)
+      return sharedStateResponse(latestUser, serialized, messages)
     case 'human_in_the_loop':
       return serialized.includes('accepted') && serialized.includes('true')
         ? text('The approved task plan is ready.')
-        : toolCall(`steps-${requestNumber}`, 'generate_task_steps', {
+        : toolCall(nextCallId('steps'), 'generate_task_steps', {
             steps: [
               { description: 'Start The Planning', status: 'enabled' },
               { description: 'Gather the eggs', status: 'enabled' },
@@ -45,7 +46,7 @@ function responseFor(feature, requestNumber, latestUser, serialized, messages) {
     case 'tool_based_generative_ui':
       return serialized.includes('Haiku generated!')
         ? text('The haiku card is ready.')
-        : toolCall(`haiku-${requestNumber}`, 'generate_haiku', {
+        : toolCall(nextCallId('haiku'), 'generate_haiku', {
             japanese: ['春の風', '静かな月', '花が咲く'],
             english: ['Spring wind', 'A quiet moon', 'Flowers bloom'],
             image: 'mountain',
@@ -65,7 +66,7 @@ function chatResponse(latestUser, serialized) {
   return match ? `Hello ${match[1]}.` : 'Hello from the DSH AG-UI Dojo example.'
 }
 
-function sharedStateResponse(requestNumber, latestUser, serialized, messages) {
+function sharedStateResponse(latestUser, serialized, messages) {
   const state = readSharedState(messages)
   if (/all.*ingredients|ingredients.*all/i.test(latestUser)) {
     const names = state?.recipe?.ingredients?.map(item => item.name).filter(Boolean) ?? []
@@ -73,7 +74,7 @@ function sharedStateResponse(requestNumber, latestUser, serialized, messages) {
   }
   if (serialized.includes('Pasta Primavera')) return text('The shared recipe was updated.')
   const currentRecipe = state?.recipe ?? {}
-  return toolCall(`state-${requestNumber}`, 'ag_ui_update_state', {
+  return toolCall(nextCallId('state'), 'ag_ui_update_state', {
     state_updates: {
       recipe: {
         ...currentRecipe,
@@ -87,6 +88,11 @@ function sharedStateResponse(requestNumber, latestUser, serialized, messages) {
       },
     },
   })
+}
+
+function nextCallId(prefix) {
+  callSequence += 1
+  return `${prefix}-${callSequence}`
 }
 
 function readFeature(messages) {

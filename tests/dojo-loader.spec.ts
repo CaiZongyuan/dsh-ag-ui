@@ -117,31 +117,9 @@ describe('Dojo-compatible feature suite', () => {
     await verifyGenerativeUi(base)
 
     const debug = await fetch(`${base}/debug/state`).then(response => response.json()) as {
-      bffRuns: Record<string, number>
-      modelRequests: Record<string, number>
-      backendToolCalls: Array<{ feature: string; threadId: string; args: { location: string } }>
       abortedRequests: Record<string, number>
     }
-    expect(debug.bffRuns).toMatchObject({
-      agentic_chat: 5,
-      backend_tool_rendering: 1,
-      shared_state: 2,
-      human_in_the_loop: 2,
-      tool_based_generative_ui: 2,
-    })
-    expect(debug.modelRequests).toMatchObject({
-      agentic_chat: 5,
-      backend_tool_rendering: 2,
-      shared_state: 3,
-      human_in_the_loop: 2,
-      tool_based_generative_ui: 2,
-    })
     expect(debug.abortedRequests).toEqual({ agentic_chat: 1 })
-    expect(debug.backendToolCalls).toEqual([expect.objectContaining({
-      feature: 'backend_tool_rendering',
-      threadId: 'dojo-weather',
-      args: { location: 'San Francisco' },
-    })])
 
     children.splice(children.indexOf(child), 1)
     expect((await fetch(`${base}/debug/shutdown`, { method: 'POST' })).status).toBe(202)

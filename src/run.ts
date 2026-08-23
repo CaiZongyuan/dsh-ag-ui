@@ -13,46 +13,12 @@ export interface RunRecord {
   bytes: number
 }
 
-/** Single-consumer async queue accepting synchronous Session projections. */
-class EventQueue implements AsyncIterable<BaseEvent> {
-  private readonly values: BaseEvent[] = []
-  private waiter: PromiseWithResolvers<void> | undefined
-  private closed = false
-
-  push(value: BaseEvent): void {
-    /* v8 ignore next -- RunController never appends after its terminal close. */
-    if (this.closed) return
-    this.values.push(value)
-    this.waiter?.resolve()
-    this.waiter = undefined
-  }
-
-  close(): void {
-    /* v8 ignore next -- one RunController owns one terminal queue close. */
-    if (this.closed) return
-    this.closed = true
-    this.waiter?.resolve()
-    this.waiter = undefined
-  }
-
-  async *[Symbol.asyncIterator](): AsyncIterator<BaseEvent> {
-    while (!this.closed || this.values.length > 0) {
-      const value = this.values.shift()
-      if (value !== undefined) {
-        yield value
-        continue
-      }
-      this.waiter ??= Promise.withResolvers<void>()
-      await this.waiter.promise
-    }
-  }
-}
-
 /** One AG-UI HTTP run, independent from the DSH turn it observes. */
 export class RunController {
-  private readonly queue = new EventQueue()
   private readonly settled = Promise.withResolvers<void>()
   private readonly terminalReserveBytes: number
+  private waiter: PromiseWithResolvers<void> | undefined
+  private cursor = 0
   private terminal = false
 
   /** DSH turn projected into this HTTP run. */
@@ -61,7 +27,6 @@ export class RunController {
   messageId: string | undefined
 
   constructor(
-    readonly generation: number,
     readonly input: RunAgentInput,
     readonly record: RunRecord,
     private readonly maxEvents: number,
@@ -149,11 +114,19 @@ export class RunController {
       'x-accel-buffering': 'no',
     })
     response.flushHeaders()
-    for await (const event of this.queue) {
-      if (response.destroyed || response.writableEnded) break
-      if (!response.write(encoder.encodeSSE(event))) {
-        await Promise.race([once(response, 'drain'), once(response, 'close')])
+    while (!response.destroyed && !response.writableEnded) {
+      const event = this.record.events[this.cursor]
+      if (event !== undefined) {
+        this.cursor += 1
+        if (!response.write(encoder.encodeSSE(event))) {
+          await Promise.race([once(response, 'drain'), once(response, 'close')])
+        }
+        continue
       }
+      if (this.terminal) break
+      const waiter = Promise.withResolvers<void>()
+      this.waiter = waiter
+      await waiter.promise
     }
     if (!response.destroyed && !response.writableEnded) response.end()
   }
@@ -170,7 +143,13 @@ export class RunController {
   private append(event: BaseEvent, bytes = eventBytes(event)): void {
     this.record.events.push(event)
     this.record.bytes += bytes
-    this.queue.push(event)
+    this.wakeWriter()
+  }
+
+  private wakeWriter(): void {
+    const waiter = this.waiter
+    this.waiter = undefined
+    waiter?.resolve()
   }
 
   private finish(event: BaseEvent): void {
@@ -188,7 +167,6 @@ export class RunController {
     this.terminal = true
     this.append(terminal, bytes)
     this.record.state = 'completed'
-    this.queue.close()
     this.settled.resolve()
   }
 }

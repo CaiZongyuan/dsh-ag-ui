@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { RunAgentInput, Tool } from '@ag-ui/core'
 import { Context } from '@deepseek-ai/cordis'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
-import { LlmAdapter, type GenerateOptions, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { ScriptedAdapter, type ScriptedResponse, textResponse } from './scripted-adapter.ts'
 import { mountTestSpine } from './spine.ts'
 import AgUiGateway, { type Config } from 'dsh-ag-ui'
 import { SessionId } from '@deepseek-ai/dsh-session'
@@ -15,41 +15,15 @@ const HEADERS = {
   'x-dsh-user-id': 'user-1',
 }
 
-class ScriptedAdapter extends LlmAdapter {
-  constructor(private readonly script: Array<StreamChunk[] | Error>) {
-    super()
-  }
-
-  override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
-    return Promise.resolve({ provider, id: model, name: model })
-  }
-
-  async *stream(_request: GenerateOptions): AsyncIterable<StreamChunk> {
-    const response = this.script.shift()
-    if (response instanceof Error) throw response
-    if (response === undefined) throw new Error('script exhausted')
-    for (const chunk of response) yield chunk
-  }
-}
-
 const contexts: Context[] = []
 
 afterEach(async () => {
   for (const ctx of contexts.splice(0).reverse()) await ctx.fiber.dispose()
 })
 
-function textResponse(text: string): StreamChunk[] {
-  return [
-    { type: 'block-start', index: 0, blockType: 'text' },
-    { type: 'text-delta', index: 0, text },
-    { type: 'block-end', index: 0, block: { type: 'text', text } },
-    { type: 'finish', reason: { kind: 'stop' } },
-  ]
-}
-
 async function mount(
   overrides: Partial<Config> = {},
-  script: Array<StreamChunk[] | Error> = [textResponse('ok')],
+  script: ScriptedResponse[] = [textResponse('ok')],
   host: '127.0.0.1' | '0.0.0.0' = '127.0.0.1',
 ) {
   const ctx = new Context()

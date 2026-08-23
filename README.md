@@ -240,26 +240,7 @@ Shared state is model/UI collaboration data. It never grants backend authority a
 
 ## Dojo-compatible example
 
-The source-checkout-only keyless example exposes five standard feature paths through one private Gateway and a same-process BFF. The framework-free BFF plugin itself ships as the Loader subpath `dsh-ag-ui/dojo-host`; the scripted model and launcher remain source fixtures.
-
-```text
-/agentic_chat
-/backend_tool_rendering
-/shared_state
-/human_in_the_loop
-/tool_based_generative_ui
-```
-
-Until AG-UI accepts a dedicated DSH registry entry, local upstream Dojo testing temporarily reuses the Claude Agent SDK TypeScript menu entry only as a URL/path alias. No Claude runtime, model, or credential is involved; see the example README for the exact explanation.
-
-Start it with:
-
-```bash
-pnpm build
-HOST=0.0.0.0 PORT=8020 node examples/dojo/start.mjs
-```
-
-See [examples/dojo/README.md](examples/dojo/README.md) for client examples, the official upstream Dojo UI compatibility path, real-model Profile configuration, and security limitations. The built-package E2E drives all five paths through the real Cordis Loader and official `HttpAgent`.
+The package ships the framework-free BFF plugin as `dsh-ag-ui/dojo-host`. The keyless scripted model, launcher, and five-feature suite remain source-checkout fixtures. See [examples/dojo/README.md](examples/dojo/README.md) for commands, routes, upstream Dojo compatibility, real-model configuration, and security limitations.
 
 ## HTTP and run semantics
 

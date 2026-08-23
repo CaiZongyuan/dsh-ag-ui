@@ -1,8 +1,0 @@
-# Apply this after the installed bundle layer to configure the Gateway.
-- id: ag-ui
-  disabled: false
-  config:
-    provider: openai
-    model: gpt-5.6-sol
-    sharedSecret: !!js process.env.DSH_AG_UI_SHARED_SECRET
-    path: /ag-ui
