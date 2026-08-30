@@ -85,7 +85,7 @@
     "@types/node": "24.13.3",
     "@vitest/coverage-v8": "4.1.11",
     "dsh-ag-ui": "workspace:*",
-    "oxlint": "1.79.0",
+    "oxlint": "1.80.0",
     "publint": "0.3.24",
     "rimraf": "6.1.3",
     "tsdown": "0.22.14",
