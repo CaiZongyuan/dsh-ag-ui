@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@ag-ui/core':
-        specifier: ~0.0.58
-        version: 0.0.58
+        specifier: ~0.0.59
+        version: 0.0.59
       '@ag-ui/encoder':
         specifier: ~0.0.58
         version: 0.0.58
@@ -216,6 +216,9 @@ packages:
 
   '@ag-ui/core@0.0.58':
     resolution: {integrity: sha512-XgGb7YmhV+yMBaEmlrpsd5S+nUxq0JgSegss2t4gIFR1j7w3w0ibtKfRgcQHWeMvwZxcT5S28VEEarqtgxYYHw==}
+
+  '@ag-ui/core@0.0.59':
+    resolution: {integrity: sha512-hDgy4ipTqXieT8YG8Mr917Y+FD/f11VK1GefZ5CwTDCuNqS/oTwjJ5l/DZkicThgS8hQW/Y7wPylPBMBJ8BkUg==}
 
   '@ag-ui/encoder@0.0.58':
     resolution: {integrity: sha512-eMfjJbfAGTQECgNX3QO0Mt0V5OrIViowSPmGLzdO92q2x506K2hRs2VBlfEuAzpDFp6Eq23Q/vjNHFzv37StZw==}
@@ -1686,6 +1689,10 @@ snapshots:
       zod: 3.25.76
 
   '@ag-ui/core@0.0.58':
+    dependencies:
+      zod: 3.25.76
+
+  '@ag-ui/core@0.0.59':
     dependencies:
       zod: 3.25.76
 
