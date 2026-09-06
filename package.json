@@ -87,7 +87,7 @@
   },
   "dependencies": {
     "@ag-ui/core": "~0.0.58",
-    "@ag-ui/encoder": "~0.0.58",
+    "@ag-ui/encoder": "~0.0.59",
     "@deepseek-ai/schemastery": "3.18.2"
   },
   "peerDependencies": {
