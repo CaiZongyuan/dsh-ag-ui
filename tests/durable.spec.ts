@@ -163,7 +163,7 @@ async function sessionLogPath(root: string, threadId: string): Promise<string> {
     if (!project.isDirectory()) continue
     const entries = await readdir(join(root, project.name), { withFileTypes: true })
     const match = entries.find(entry => entry.isDirectory() && entry.name === sessionId)
-    if (match !== undefined) return join(root, project.name, match.name, 'session.jsonl')
+    if (match !== undefined) return join(root, project.name, match.name, 'session.v3.jsonl')
   }
   throw new Error(`no persisted session for ${threadId} under ${root}`)
 }

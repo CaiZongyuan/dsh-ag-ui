@@ -1,3 +1,4 @@
+import { LlmAttemptId } from '@deepseek-ai/dsh-llm'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventType, type RunAgentInput, type Tool } from '@ag-ui/core'
 import { Context } from '@deepseek-ai/cordis'
@@ -244,7 +245,7 @@ describe('ThreadBinding run admission', () => {
     const controller = binding.reserveRun(input('run-derived', [{ id: 'message-derived', role: 'user', content: 'hello' }]), 'digest-derived')
     binding.drive(controller)
     await controller.done
-    const logged = binding.liveAgent.session.events
+    const logged = binding.liveAgent.session.snapshotEvents()
       .find(item => item.type === 'user/message' && item.data.source.kind === 'user')
     expect(logged?.data.id).toBe('ag-ui:user:message-derived')
   })
@@ -328,7 +329,7 @@ describe('ThreadBinding frontend Tools', () => {
     binding.drive(result)
     await result.done
     expect(result.record.events.some(event => event.type === EventType.TOOL_CALL_RESULT)).toBe(false)
-    expect(binding.liveAgent.session.events.some(event => event.type === 'tool/result'
+    expect(binding.liveAgent.session.snapshotEvents().some(event => event.type === 'tool/result'
       && event.data.message.content[0].isError === true)).toBe(true)
     expect(result.record.events.at(-1)?.type).toBe(EventType.RUN_FINISHED)
   })
@@ -368,7 +369,7 @@ describe('ThreadBinding frontend Tools', () => {
     binding.drive(controller)
     await controller.done
     await binding.liveAgent.whenIdle()
-    expect(binding.liveAgent.session.events.some(event => event.type === 'tool/result'
+    expect(binding.liveAgent.session.snapshotEvents().some(event => event.type === 'tool/result'
       && event.data.message.content[0].isError === true
       && event.data.message.content[0].content.some(content => content.type === 'text'
         && content.text.includes('Invalid frontend Tool arguments')))).toBe(true)
@@ -386,7 +387,7 @@ describe('ThreadBinding frontend Tools', () => {
     await controller.done
     await vi.advanceTimersByTimeAsync(50)
     await binding.liveAgent.whenIdle()
-    expect(binding.liveAgent.session.events.some(event => event.type === 'tool/result'
+    expect(binding.liveAgent.session.snapshotEvents().some(event => event.type === 'tool/result'
       && event.data.message.content[0].isError === true)).toBe(true)
   })
 
@@ -503,7 +504,7 @@ describe('ThreadBinding shared state', () => {
       await controller.done
       expect(controller.record.events.at(-1)).toMatchObject({ code: 'AG_UI_EVENT_BUFFER_OVERFLOW' })
       expect(overflow.adapter.requests).toEqual([])
-      expect(overflow.binding.liveAgent.session.events.some(event => event.type === 'turn/start')).toBe(false)
+      expect(overflow.binding.liveAgent.session.snapshotEvents().some(event => event.type === 'turn/start')).toBe(false)
       expect(internals(overflow.binding).sharedStateActive).toBe(false)
     }
 
@@ -559,7 +560,7 @@ describe('ThreadBinding shared state', () => {
         { type: EventType.STATE_SNAPSHOT, snapshot: { value: 1 } },
       ])
       expect(controller.record.events.at(-1)).toMatchObject({ code: 'AG_UI_EVENT_BUFFER_OVERFLOW' })
-      expect(fixture.binding.liveAgent.session.events.some(event => event.type === 'tool/result'
+      expect(fixture.binding.liveAgent.session.snapshotEvents().some(event => event.type === 'tool/result'
         && event.data.message.content[0].isError === true)).toBe(true)
     }
   })
@@ -694,6 +695,7 @@ describe('ThreadBinding defensive Tool execution', () => {
     session.append('turn/start', { turn: 1 })
     session.append('step/start', { turn: 1, step: 1 })
     session.append('assistant/message', {
+      stream: [],
       turn: 1,
       step: 1,
       message: createAssistantMessage({
@@ -756,7 +758,7 @@ describe('ThreadBinding session projection', () => {
     controller.start()
     binding.liveAgent.session.append('turn/start', { turn: 1 })
     binding.liveAgent.session.append('step/start', { turn: 1, step: 1 })
-    binding.liveAgent.session.append('assistant/message', { turn: 1, step: 1, message }, { surfaceOp: 'append' })
+    binding.liveAgent.session.append('assistant/message', { turn: 1, step: 1, message, stream: [] }, { surfaceOp: 'append' })
     binding.liveAgent.session.append('step/end', { turn: 1, step: 1 })
     binding.liveAgent.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
     await controller.done
@@ -780,13 +782,20 @@ describe('ThreadBinding session projection', () => {
     controller.start()
     binding.liveAgent.session.append('turn/start', { turn: 1 })
     binding.liveAgent.session.append('step/start', { turn: 1, step: 1 })
-    binding.liveAgent.session.append('assistant/chunk', {
-      turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'two ' },
-    })
-    binding.liveAgent.session.append('assistant/chunk', {
-      turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'deltas' },
-    })
-    binding.liveAgent.session.append('assistant/message', { turn: 1, step: 1, message }, { surfaceOp: 'append' })
+    const agent = binding.liveAgent
+    agent.ctx.emit('agent/assistant-stream', { agent, frame: {
+      type: 'start', attemptId: LlmAttemptId('attempt'), revision: 1, turn: 1, step: 1,
+    } })
+    for (const [index, text] of ['two ', 'deltas'].entries()) {
+      agent.ctx.emit('agent/assistant-stream', { agent, frame: {
+        type: 'chunk', attemptId: LlmAttemptId('attempt'), revision: 1, index, time: index,
+        chunk: { type: 'text-delta', index: 0, text },
+      } })
+    }
+    // Deltas reach the client before the durable assembled message exists.
+    expect(controller.record.events.filter(event => event.type === EventType.TEXT_MESSAGE_CONTENT)).toHaveLength(2)
+    expect(agent.session.snapshotEvents().some(event => event.type === 'assistant/message')).toBe(false)
+    binding.liveAgent.session.append('assistant/message', { turn: 1, step: 1, message, stream: [] }, { surfaceOp: 'append' })
     binding.liveAgent.session.append('step/end', { turn: 1, step: 1 })
     binding.liveAgent.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
     await controller.done
@@ -819,6 +828,7 @@ describe('ThreadBinding session projection', () => {
             height: 1,
           },
         },
+        { type: 'file', attachment: { attachmentId: 'test-file' as never, mediaType: 'application/pdf', bytes: 5, name: 'test.pdf' } },
         { type: 'tool-call', id: ToolCallId('nested-call'), name: 'nested_tool', arguments: '{}' },
         nested,
       ],
@@ -832,7 +842,7 @@ describe('ThreadBinding session projection', () => {
     await controller.done
     const projected = controller.record.events.find(event => event.type === EventType.TOOL_CALL_RESULT)
     expect(projected).toMatchObject({
-      content: 'plain text\nreasoning text\n[image result]\n[nested tool call: nested_tool]\nnested text',
+      content: 'plain text\nreasoning text\n[image result]\n[file result]\n[nested tool call: nested_tool]\nnested text',
     })
   })
 

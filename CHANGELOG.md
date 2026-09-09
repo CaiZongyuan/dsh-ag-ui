@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Updated Gateway and adapter peers to DeepSeek Harness `0.1.5-alpha.1`; live text now consumes `agent/assistant-stream`, history uses session snapshots, and Agent setup uses the explicit callback argument.
+- Resume now creates a session only for `SessionPersistenceNotFoundError`, preserving corruption and format-refusal errors.
+- Verified v3 session persistence and migration from the recorded `0.1.1-rc.2` log; file Tool results project as `[file result]`.
+
 - Browser Tool names now accept standard AG-UI-compatible ASCII identifiers while reserving the internal state Tool name.
 - Consolidated internal Tool-call and Run-event bookkeeping and removed redundant source fixtures without changing protocol behavior.
 - Upgraded the exact DeepSeek Harness compatibility target to `0.1.2-alpha.3` and replaced the removed composition package with supported explicit Agent-core rows.

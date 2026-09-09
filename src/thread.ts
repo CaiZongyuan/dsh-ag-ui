@@ -7,9 +7,10 @@ import {
   type ToolMessage as AgUiToolMessage,
   type UserMessage as AgUiUserMessage,
 } from '@ag-ui/core'
-import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle, AgentSetup } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, errorChain, freezeMessage, MessageId, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
 import {
   assertObjectJsonSchema,
   validateJsonSchemaValue,
@@ -134,28 +135,30 @@ export class ThreadBinding {
     // the resolved preset is snapshotted into durable meta at creation, before any await
     const meta = this.options.presetId === undefined ? {} : { meta: { agentPreset: this.options.presetId } }
     const create = () => this.ctx.agents.create({ sessionId: this.sessionId, ...meta, agentOptions, setup: this.agentSetup() })
-    const persistence = sessionPersistenceOf(this.ctx)
-    if (persistence === undefined) return create()
+    if (this.ctx.get('sessionPersistence') === undefined) return create()
     try {
       const handle = await this.ctx.agents.resume({ resumeSessionId: this.sessionId, agentOptions, setup: this.agentSetup() })
-      this.recover(handle.agent.session.events)
+      this.recover(handle.agent.session.snapshotEvents())
       return handle
     } catch (error) {
-      // only a genuinely absent artifact falls back to first creation; a present one keeps its failure loud
-      if ((await persistence.list()).some(header => header.id === this.sessionId)) throw error
+      // A missing log permits creation; corruption, format refusal, and setup failures do not.
+      if (!(error instanceof SessionPersistenceNotFoundError)) throw error
       return create()
     }
   }
 
-  private agentSetup(): (agentCtx: Context) => Promise<void> {
-    return async (agentCtx) => {
-      const agent = agentCtx.agent
-      /* v8 ignore next -- AgentRegistry setup always carries its unpublished Agent association. */
-      if (agent === undefined) throw new Error('ag-ui: unpublished Agent context has no Agent association')
+  private agentSetup(): AgentSetup {
+    return async (agentCtx, agent) => {
       this.agent = agent
       agentCtx.on('session/event', (session, event) => {
         /* v8 ignore next -- the Agent-scoped listener receives only its exact owned Session. */
         if (session === agent.session) this.onSessionEvent(event)
+      })
+      agentCtx.on('agent/assistant-stream', ({ agent: subject, frame }) => {
+        /* v8 ignore next -- the Agent-scoped stream belongs to this exact Agent. */
+        if (subject !== agent) return
+        const active = this.activeRun
+        for (const event of this.projection.projectStream(frame, active?.turn).events) active?.emit(event)
       })
       agentCtx.on('agent/inbox/claimed', ({ agent: subject, message, turn }) => {
         const active = this.activeRun
@@ -261,12 +264,13 @@ export class ThreadBinding {
   drive(controller: RunController): void {
     if (this.activeRun !== controller) throw new AgUiGatewayError('RUN_NOT_ACTIVE', 'The AG-UI run lost its reservation.', 409)
     controller.start()
+    const history = this.liveAgent.session.snapshotEvents()
     controller.emit({
       type: EventType.MESSAGES_SNAPSHOT,
-      messages: this.projection.messagesSnapshot(this.liveAgent.session.events, id => this.userMessageIds.get(id)),
+      messages: this.projection.messagesSnapshot(history, id => this.userMessageIds.get(id)),
     })
     // the transcript's settled cards ride beside the snapshot, re-derived from the same durable log
-    for (const view of this.projection.toolViewEvents(this.liveAgent.session.events)) controller.emit(view)
+    for (const view of this.projection.toolViewEvents(history)) controller.emit(view)
     // a snapshot that overflowed the run budget already settled the run
     if (controller.record.state !== 'active') return
     // a restarted thread reports its interrupted turn once so the client can drop parked calls
@@ -731,16 +735,6 @@ function isEmptyStateContainer(value: unknown): boolean {
 /** Digest one accepted user message in a fixed field order, stable across cold resume. */
 function messageDigest(clientId: string, content: string): string {
   return valueDigest({ id: clientId, role: 'user', content })
-}
-
-/** Optional durable persistence service, when the host configured a backend. */
-interface SessionPersistenceLike {
-  list(signal?: AbortSignal): Promise<ReadonlyArray<{ readonly id: SessionId }>>
-}
-
-/** Resolve the host's session persistence backend without requiring one. */
-function sessionPersistenceOf(ctx: Context): SessionPersistenceLike | undefined {
-  return (ctx as Context & { get(name: string): unknown }).get('sessionPersistence') as SessionPersistenceLike | undefined
 }
 
 /** Narrow a JSON object without accepting arrays or null. */

@@ -310,7 +310,7 @@ The separate [`dsh-ag-ui-adapter`](packages/dsh-ag-ui-adapter) package is the em
 - `runId` is an exact-request idempotency key. Completed identical requests replay retained events without driving DSH again.
 - One thread can have only one active HTTP run.
 - An active shared-state run emits its synchronization snapshot before model events.
-- V1 allows one frontend Tool call per DSH step.
+- One DSH step can park multiple frontend Tool calls; continuation runs may answer a subset.
 
 ## Client-provided Tools
 
@@ -358,7 +358,9 @@ An unexpected HTTP disconnect cancels the Gateway-owned DSH turn. `HttpAgent` do
 | --- | --- |
 | AG-UI core/client/encoder | `>=0.0.58 <0.1.0` (`~0.0.58`; tested with `0.0.58`) |
 | Node.js | `^22.19.0` or `>=24.0.0` |
-| DeepSeek Harness | `0.1.2-alpha.3` (exact developer-preview peers) |
+| DeepSeek Harness | `0.1.5-alpha.1` (exact developer-preview peers) |
+
+DSH `0.1.5-alpha.1` uses session log v3. Live text arrives through `agent/assistant-stream`; settled history is read with `snapshotEvents()`. With the JSONL persistence plugin configured, DSH migrates older logs on resume (tested with a `0.1.1-rc.2` recording). Image and file Tool results are represented by `[image result]` and `[file result]` placeholders; attachment bytes are not transported.
 
 DSH is in developer preview and can introduce breaking changes. This package uses exact DSH peer versions until those APIs stabilize.
 
@@ -408,10 +410,9 @@ An unchanged Tool set preserves the Tool-schema prefix. Adding, removing, or cha
 
 ## Known limitations
 
-- Thread, run, and shared state is process-local.
-- Host restart does not call `agents.resume()`, recover a parked browser Tool, or restore shared state without a new client baseline.
+- Live thread bindings, run replay buffers, and shared state are process-local; session history can persist through the Host persistence plugin.
+- Host restart resumes stored sessions with `agents.resume()`. Parked browser Tools are not recovered: an interrupted turn reports `THREAD_INTERRUPTED`, and shared state needs a new client baseline.
 - Only text user input, assistant text, and string Tool results are adapted.
-- One frontend Tool call is allowed per DSH step.
 - Partial SSE reconnect is not supported.
 - `STATE_DELTA`, AG-UI interrupt/HITL `resume[]`, multimodal messages, reasoning events, and activity events are not adapted yet.
 - Shared-state updates use shallow top-level merge and do not provide versions, deep merge, or conflict resolution.

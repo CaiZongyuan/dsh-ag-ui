@@ -98,8 +98,8 @@ describe('AG-UI Gateway', () => {
 
     const dshAgent = harness.ctx.agents.list()[0]
     expect(dshAgent).toBeDefined()
-    expect(dshAgent?.session.events.filter(event => event.type === 'tool/call')).toHaveLength(1)
-    expect(dshAgent?.session.events.filter(event => event.type === 'tool/result')).toHaveLength(1)
+    expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'tool/call')).toHaveLength(1)
+    expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'tool/result')).toHaveLength(1)
     expect(harness.ctx.agUi.identityFor(dshAgent as NonNullable<typeof dshAgent>)).toEqual({
       principal: { tenantId: 'hospital-demo', userId: 'clinician-1' },
       threadId: 'shared-state-thread',
@@ -121,7 +121,7 @@ describe('AG-UI Gateway', () => {
     expect(events.filter(event => event.type === EventType.STATE_SNAPSHOT)).toEqual([
       { type: EventType.STATE_SNAPSHOT, snapshot: { status: 'draft', nested: { first: 1, second: 2 } } },
     ])
-    expect(harness.ctx.agents.list()[0]?.session.events.filter(event => event.type === 'tool/result')).toHaveLength(1)
+    expect(harness.ctx.agents.list()[0]?.session.snapshotEvents().filter(event => event.type === 'tool/result')).toHaveLength(1)
   })
 
   it('parks one frontend Tool across two HTTP runs and resumes the same DSH turn', async () => {
@@ -156,9 +156,9 @@ describe('AG-UI Gateway', () => {
     ])
     const dshAgent = harness.ctx.agents.list()[0]
     expect(dshAgent?.status).toBe('running')
-    expect(dshAgent?.session.events.filter(event => event.type === 'turn/start')).toHaveLength(1)
-    expect(dshAgent?.session.events.filter(event => event.type === 'tool/call')).toHaveLength(1)
-    expect(dshAgent?.session.events.filter(event => event.type === 'tool/result')).toHaveLength(0)
+    expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'turn/start')).toHaveLength(1)
+    expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'tool/call')).toHaveLength(1)
+    expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'tool/result')).toHaveLength(0)
 
     agent.addMessage({
       id: 'tool-result-1',
@@ -186,9 +186,9 @@ describe('AG-UI Gateway', () => {
       EventType.RUN_FINISHED,
     ])
     expect(dshAgent?.status).toBe('idle')
-    expect(dshAgent?.session.events.filter(event => event.type === 'turn/start')).toHaveLength(1)
-    expect(dshAgent?.session.events.filter(event => event.type === 'turn/end')).toHaveLength(1)
-    expect(dshAgent?.session.events.filter(event => event.type === 'tool/result')).toHaveLength(1)
+    expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'turn/start')).toHaveLength(1)
+    expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'turn/end')).toHaveLength(1)
+    expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'tool/result')).toHaveLength(1)
     expect(harness.adapter.requests).toHaveLength(2)
     const secondRequest = harness.adapter.requests[1]
     expect(secondRequest?.messages.some(message => message.content.some(block =>
@@ -224,8 +224,8 @@ describe('AG-UI Gateway', () => {
     ])
     const dshAgent = harness.ctx.agents.list()[0]
     expect(dshAgent?.status).toBe('running')
-    expect(dshAgent?.session.events.filter(event => event.type === 'tool/call')).toHaveLength(2)
-    expect(dshAgent?.session.events.filter(event => event.type === 'tool/result')).toHaveLength(0)
+    expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'tool/call')).toHaveLength(2)
+    expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'tool/result')).toHaveLength(0)
 
     agent.addMessage({
       id: 'multi-result-a',
@@ -240,7 +240,7 @@ describe('AG-UI Gateway', () => {
       EventType.RUN_FINISHED,
     ])
     expect(dshAgent?.status).toBe('running')
-    expect(dshAgent?.session.events.filter(event => event.type === 'tool/result')).toHaveLength(1)
+    expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'tool/result')).toHaveLength(1)
 
     agent.addMessage({
       id: 'multi-result-b',
@@ -258,9 +258,9 @@ describe('AG-UI Gateway', () => {
       EventType.RUN_FINISHED,
     ])
     expect(dshAgent?.status).toBe('idle')
-    expect(dshAgent?.session.events.filter(event => event.type === 'turn/start')).toHaveLength(1)
-    expect(dshAgent?.session.events.filter(event => event.type === 'turn/end')).toHaveLength(1)
-    expect(dshAgent?.session.events.filter(event => event.type === 'tool/result')).toHaveLength(2)
+    expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'turn/start')).toHaveLength(1)
+    expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'turn/end')).toHaveLength(1)
+    expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'tool/result')).toHaveLength(2)
     expect(harness.adapter.requests).toHaveLength(2)
   })
 
@@ -308,8 +308,8 @@ describe('AG-UI Gateway', () => {
       EventType.RUN_FINISHED,
     ])
     const dshAgent = harness.ctx.agents.list()[0]
-    expect(dshAgent?.session.events.filter(event => event.type === 'tool/result')).toHaveLength(2)
-    expect(dshAgent?.session.events.filter(event => event.type === 'turn/start')).toHaveLength(1)
+    expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'tool/result')).toHaveLength(2)
+    expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'turn/start')).toHaveLength(1)
   })
 
   it('accepts official-client backend ToolMessage history without echoing frontend results', async () => {

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -94,7 +94,7 @@ describe('ThreadBinding durable resume', () => {
     const resumed = bindingFor(second.ctx)
     await resumed.initialize()
     expect(String(resumed.sessionId)).toBe(String(SESSION))
-    expect(resumed.liveAgent.session.events.some(item =>
+    expect(resumed.liveAgent.session.snapshotEvents().some(item =>
       item.type === 'assistant/message' && JSON.stringify(item.data).includes('pine-cone-7'))).toBe(true)
 
     const continuation = resumed.reserveRun(input('run-resume-2', [
@@ -125,7 +125,7 @@ describe('ThreadBinding durable resume', () => {
     const mounted = await mountDurable([textResponse('History kept the codeword pine-cone-7.')], root)
     const resumed = bindingFor(mounted.ctx, RC2_SESSION)
     await resumed.initialize()
-    expect(resumed.liveAgent.session.events.some(event =>
+    expect(resumed.liveAgent.session.snapshotEvents().some(event =>
       event.type === 'assistant/message' && JSON.stringify(event.data).includes('pine-cone-7'))).toBe(true)
 
     const continuation = resumed.reserveRun(input('run-rc2-resume', [
@@ -185,8 +185,11 @@ describe('ThreadBinding durable resume', () => {
     await writeFile(path, lines.join('\n'), 'utf8')
 
     const second = await mountDurable([], first.root)
+    const create = vi.spyOn(second.ctx.agents, 'create')
     const replacement = bindingFor(second.ctx, sessionId)
     await expect(replacement.initialize()).rejects.toThrow()
+    expect(create).not.toHaveBeenCalled()
+    expect(await readFile(path, 'utf8')).toBe(lines.join('\n'))
     expect(second.ctx.agents.list().some(agent => agent.id === sessionId)).toBe(false)
   })
 })
@@ -197,7 +200,7 @@ async function sessionLogPath(root: string, sessionId: SessionId = SESSION): Pro
     if (!project.isDirectory()) continue
     const entries = await readdir(join(root, project.name), { withFileTypes: true })
     const match = entries.find(entry => entry.isDirectory() && entry.name === String(sessionId))
-    if (match !== undefined) return join(root, project.name, match.name, 'session.jsonl')
+    if (match !== undefined) return join(root, project.name, match.name, 'session.v3.jsonl')
   }
   throw new Error(`no persisted session ${String(sessionId)} under ${root}`)
 }

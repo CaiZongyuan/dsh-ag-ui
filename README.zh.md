@@ -310,7 +310,7 @@ Upstream Dojo 的 integration registry 是静态源码，目前没有 `deepseek-
 - `runId` 是 exact-request idempotency key。已完成的相同 request 会重放 retained events，不再次驱动 DSH。
 - 一个 thread 同时只能有一个 active HTTP run。
 - Active shared-state run 会在 model events 前发送 synchronization snapshot。
-- V1 每个 DSH step 允许一个 frontend Tool call。
+- 一个 DSH step 可挂起多个 frontend Tool call；续跑可只回答其中一部分。
 
 ## Client-provided Tools
 
@@ -358,7 +358,9 @@ Backend Tool result 会发出 `TOOL_CALL_RESULT`。Frontend Tool result 不在 A
 | --- | --- |
 | AG-UI core/client/encoder | `>=0.0.58 <0.1.0`（`~0.0.58`；已用 `0.0.58` 验证） |
 | Node.js | `^22.19.0` 或 `>=24.0.0` |
-| DeepSeek Harness | `0.1.2-alpha.3`（精确的 developer-preview peers） |
+| DeepSeek Harness | `0.1.5-alpha.1`（精确的 developer-preview peers） |
+
+DSH `0.1.5-alpha.1` 使用 v3 会话日志。实时文本通过 `agent/assistant-stream` 接收，已结算历史通过 `snapshotEvents()` 读取。配置 JSONL 持久化插件后，DSH 在恢复时迁移旧日志（已用 `0.1.1-rc.2` 录制验证）。图片和文件 Tool 结果分别投影为 `[image result]` 和 `[file result]` 占位符，不传输附件字节。
 
 DSH 仍处于 developer preview，可能引入 breaking changes。在这些 API 稳定前，本 package 使用精确 DSH peer versions。
 
@@ -408,10 +410,9 @@ Tool set 不变时保留 Tool-schema prefix。添加、删除或修改 Tool 可�
 
 ## 已知限制
 
-- Thread、run 和 shared state 都是 process-local。
-- Host restart 不会调用 `agents.resume()`、恢复 parked browser Tool，或在没有新 client baseline 时恢复 shared state。
+- 活跃 thread 绑定、run 重放缓冲和 shared state 保存在进程内；会话历史可通过 Host 持久化插件保留。
+- Host 重启后通过 `agents.resume()` 恢复已保存的会话。不会恢复挂起的 browser Tool：被中断的回合返回 `THREAD_INTERRUPTED`，shared state 需要新的 client baseline。
 - 只适配 text user input、assistant text 和 string Tool results。
-- 每个 DSH step 只允许一个 frontend Tool call。
 - 不支持 partial SSE reconnect。
 - 尚未适配 `STATE_DELTA`、AG-UI interrupt/HITL `resume[]`、multimodal messages、reasoning events 和 activity events。
 - Shared-state update 使用 top-level shallow merge，不提供 version、deep merge 或 conflict resolution。

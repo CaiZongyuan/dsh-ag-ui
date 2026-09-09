@@ -185,19 +185,19 @@ describe('threads refuse a configured preset without a roster', () => {
 describe('session preset resolution', () => {
   it('prefers the newest logged selection over the creation header', () => {
     const selected = (preset: string) => ({ type: 'agent-preset/selected', data: { agentPreset: preset } })
-    expect(sessionPresetOf({ header: { agentPreset: 'alpha' }, events: [] })).toBe('alpha')
+    expect(sessionPresetOf({ header: { agentPreset: 'alpha' }, snapshotEvents: () => [] })).toBe('alpha')
     expect(sessionPresetOf({
       header: { agentPreset: 'alpha' },
-      events: [selected('beta')],
+      snapshotEvents: () => [selected('beta')],
     })).toBe('beta')
     expect(sessionPresetOf({
       header: { agentPreset: 'alpha' },
-      events: [selected('beta'), selected('gamma')],
+      snapshotEvents: () => [selected('beta'), selected('gamma')],
     })).toBe('gamma')
-    expect(sessionPresetOf({ header: {}, events: [] })).toBeUndefined()
+    expect(sessionPresetOf({ header: {}, snapshotEvents: () => [] })).toBeUndefined()
     expect(sessionPresetOf({
       header: { agentPreset: 'alpha' },
-      events: [{ type: 'agent-preset/selected', data: {} }],
+      snapshotEvents: () => [{ type: 'agent-preset/selected', data: {} }],
     })).toBe('alpha')
   })
 })

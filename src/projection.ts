@@ -1,3 +1,4 @@
+import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import { EventType, type BaseEvent, type CustomEvent, type Message as AgUiMessage } from '@ag-ui/core'
 import type { ContentBlock, ToolResultBlock } from '@deepseek-ai/dsh-llm'
 import { type SessionId, type SessionEvent, type TurnEndReason } from '@deepseek-ai/dsh-session'
@@ -79,12 +80,13 @@ interface StepToolProgress {
 const EMPTY_STEP: ProjectionStep = { events: [] }
 
 /**
- * Pure translation of one DSH session's events into AG-UI wire events: events
- * in, events out — no I/O, timers, or agent handles. The owning thread binding
- * feeds every session event through {@link SessionProjection.project} and
- * applies the returned events and run outcome to its active run controller.
+ * Pure translation of one DSH session's durable events and transient assistant
+ * frames into AG-UI wire events, without I/O, timers, or agent handles. The
+ * owning thread binding feeds both channels and applies the returned events
+ * and run outcome to its active run controller.
  */
 export class SessionProjection {
+  private stream: Extract<AssistantStreamFrame, { type: 'start' }> | undefined
   private readonly text = new Map<string, TextProjection>()
   private readonly toolCallLifecycles = new Map<string, ToolCallLifecycle>()
   private readonly stepProgress = new Map<string, StepToolProgress>()
@@ -95,6 +97,28 @@ export class SessionProjection {
   sharedState: unknown
 
   constructor(private readonly sessionId: SessionId, private readonly presenter: ToolPresenter) {}
+
+  /** Project transient provider chunks using the turn and step of their stream start. */
+  projectStream(frame: AssistantStreamFrame, activeTurn: number | undefined): ProjectionStep {
+    if (frame.type === 'start') {
+      this.stream = frame
+      return EMPTY_STEP
+    }
+    const stream = this.stream
+    if (frame.type === 'end') {
+      this.stream = undefined
+      return EMPTY_STEP
+    }
+    if (stream === undefined || stream.turn !== activeTurn || frame.chunk.type !== 'text-delta') return EMPTY_STEP
+    const projection = this.textProjection(stream.turn, stream.step)
+    const events: BaseEvent[] = []
+    if (!projection.started) {
+      projection.started = true
+      events.push({ type: EventType.TEXT_MESSAGE_START, messageId: projection.messageId, role: 'assistant' })
+    }
+    events.push({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: projection.messageId, delta: frame.chunk.text })
+    return { events }
+  }
 
   /**
    * Translate one session event against the active run's DSH turn.
@@ -109,20 +133,6 @@ export class SessionProjection {
     if (activeTurn === undefined || !eventBelongsToTurn(event, activeTurn)) return EMPTY_STEP
 
     switch (event.type) {
-      case 'assistant/chunk': {
-        if (event.data.chunk.type !== 'text-delta') return EMPTY_STEP
-        const projection = this.textProjection(event.data.turn, event.data.step)
-        if (!projection.started) {
-          projection.started = true
-          return {
-            events: [
-              { type: EventType.TEXT_MESSAGE_START, messageId: projection.messageId, role: 'assistant' },
-              { type: EventType.TEXT_MESSAGE_CONTENT, messageId: projection.messageId, delta: event.data.chunk.text },
-            ],
-          }
-        }
-        return { events: [{ type: EventType.TEXT_MESSAGE_CONTENT, messageId: projection.messageId, delta: event.data.chunk.text }] }
-      }
       case 'assistant/message': {
         const announced = announcedToolNames(event.data.message.content)
         if (announced.length > 0) {
@@ -451,6 +461,7 @@ function renderToolResult(block: ToolResultBlock): string {
     if (content.type === 'text') text.push(content.text)
     else if (content.type === 'reasoning') text.push(content.text)
     else if (content.type === 'image') text.push('[image result]')
+    else if (content.type === 'file') text.push('[file result]')
     else if (content.type === 'tool-call') text.push(`[nested tool call: ${content.name}]`)
     else text.push(renderToolResult(content))
   }

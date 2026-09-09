@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { EventType, type BaseEvent } from '@ag-ui/core'
-import { ToolCallId, createAssistantMessage, createToolResultMessage } from '@deepseek-ai/dsh-llm'
+import { LlmAttemptId, ToolCallId, createAssistantMessage, createToolResultMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { durableUserId, SessionProjection, STATE_TOOL_NAME, type ToolCallLifecycle } from '../src/projection.ts'
@@ -86,12 +86,15 @@ function userMessage(durableId: string, text: string, kind = 'user'): SessionEve
 describe('SessionProjection text', () => {
   it('opens one message across deltas and closes it at the assembled message', () => {
     const projection = new SessionProjection(sessionId, presenter)
-    const first = projection.project(event('assistant/chunk', {
-      turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'hello ' },
-    }), 1)
-    const second = projection.project(event('assistant/chunk', {
-      turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'world' },
-    }), 1)
+    projection.projectStream({ type: 'start', attemptId: LlmAttemptId('attempt'), revision: 1, turn: 1, step: 1 }, 1)
+    const first = projection.projectStream({
+      type: 'chunk', attemptId: LlmAttemptId('attempt'), revision: 1, index: 0, time: 0,
+      chunk: { type: 'text-delta', index: 0, text: 'hello ' },
+    }, 1)
+    const second = projection.projectStream({
+      type: 'chunk', attemptId: LlmAttemptId('attempt'), revision: 1, index: 1, time: 1,
+      chunk: { type: 'text-delta', index: 0, text: 'world' },
+    }, 1)
     const closed = projection.project(textMessage('hello world'), 1)
 
     expect([...first.events, ...second.events, ...closed.events]).toEqual([
@@ -101,6 +104,24 @@ describe('SessionProjection text', () => {
       { type: EventType.TEXT_MESSAGE_END, messageId },
     ])
     expect(first.outcome).toBeUndefined()
+  })
+
+  it('ignores inactive streams and non-text frames, and clears an ended stream', () => {
+    const projection = new SessionProjection(sessionId, presenter)
+    const attemptId = LlmAttemptId('attempt')
+    const chunk = {
+      type: 'chunk' as const, attemptId, revision: 1, index: 0, time: 0,
+      chunk: { type: 'text-delta' as const, index: 0, text: 'hello' },
+    }
+    expect(projection.projectStream(chunk, 1).events).toEqual([])
+    projection.projectStream({ type: 'start', attemptId, revision: 1, turn: 1, step: 1 }, undefined)
+    expect(projection.projectStream(chunk, undefined).events).toEqual([])
+    expect(projection.projectStream(chunk, 2).events).toEqual([])
+    expect(projection.projectStream({ ...chunk, chunk: { type: 'block-start', index: 0, blockType: 'text' } }, 1).events).toEqual([])
+    expect(projection.projectStream({
+      type: 'end', attemptId, revision: 1, index: 1, outcome: { kind: 'abandoned' },
+    }, 1).events).toEqual([])
+    expect(projection.projectStream(chunk, 1).events).toEqual([])
   })
 
   it('projects an assembled-only message as one start/content/end triple', () => {
@@ -113,14 +134,10 @@ describe('SessionProjection text', () => {
     ])
   })
 
-  it('emits nothing for a text-less step and ignores non-text chunks', () => {
+  it('emits nothing for a text-less step', () => {
     const projection = new SessionProjection(sessionId, presenter)
     const empty = projection.project(textMessage(''), 1)
-    const ignored = projection.project(event('assistant/chunk', {
-      turn: 1, step: 2, chunk: { type: 'block-start', index: 0, blockType: 'text' },
-    }), 1)
     expect(empty.events).toEqual([])
-    expect(ignored.events).toEqual([])
   })
 })
 

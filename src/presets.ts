@@ -21,7 +21,7 @@ export function agentPresetsOf(ctx: Context): AgentPresetsLike | undefined {
 
 interface PresetBearingSession {
   readonly header: { readonly agentPreset?: string }
-  readonly events: ReadonlyArray<{ readonly type: string; readonly data: unknown }>
+  snapshotEvents(): ReadonlyArray<{ readonly type: string; readonly data: unknown }>
 }
 
 /**
@@ -31,8 +31,9 @@ interface PresetBearingSession {
  * resolver without depending on the roster package.
  */
 export function sessionPresetOf(session: PresetBearingSession): string | undefined {
-  for (let index = session.events.length - 1; index >= 0; index -= 1) {
-    const event = session.events[index]
+  const events = session.snapshotEvents()
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
     if (event?.type !== 'agent-preset/selected') continue
     if (typeof event.data === 'object' && event.data !== null
       && typeof (event.data as { agentPreset?: unknown }).agentPreset === 'string') {
