@@ -358,9 +358,9 @@ An unexpected HTTP disconnect cancels the Gateway-owned DSH turn. `HttpAgent` do
 | --- | --- |
 | AG-UI core/client/encoder | `>=0.0.58 <0.1.0` (`~0.0.58`; tested with `0.0.58`) |
 | Node.js | `^22.19.0` or `>=24.0.0` |
-| DeepSeek Harness | `0.1.5-alpha.1` (exact developer-preview peers) |
+| DeepSeek Harness | `0.1.5-rc.2` (exact release-candidate peers) |
 
-DSH `0.1.5-alpha.1` uses session log v3. Live text arrives through `agent/assistant-stream`; settled history is read with `snapshotEvents()`. With the JSONL persistence plugin configured, DSH migrates older logs on resume (tested with a `0.1.1-rc.2` recording). Image and file Tool results are represented by `[image result]` and `[file result]` placeholders; attachment bytes are not transported.
+DSH `0.1.5-rc.2` uses session log v3. Live text arrives through `agent/assistant-stream`; settled history is read with `snapshotEvents()`. With the JSONL persistence plugin configured, DSH migrates older logs on resume (tested with a `0.1.1-rc.2` recording). Image and file Tool results are represented by `[image result]` and `[file result]` placeholders; attachment bytes are not transported.
 
 DSH is in developer preview and can introduce breaking changes. This package uses exact DSH peer versions until those APIs stabilize.
 
