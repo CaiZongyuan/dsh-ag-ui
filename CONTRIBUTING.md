@@ -21,6 +21,10 @@ pnpm -r --workspace-concurrency=1 --include-workspace-root check
 
 The repository is a pnpm workspace: the root package is the Gateway, and `packages/` holds the `dsh-ag-ui-cards` React card renderers and the `dsh-ag-ui-adapter` embedding adapter. `pnpm check` inside a package checks that package; `pnpm -r --workspace-concurrency=1 --include-workspace-root check` checks every workspace project. Workspace checks run sequentially because adapter checks rebuild the Gateway.
 
+## Dependency maintenance
+
+Dependencies are maintained manually. Keep Dependabot vulnerability alerts enabled in the repository settings, but disable automatic security-update pull requests and leave version updates unconfigured. Review dependency changes with the workspace checks above before merging.
+
 ## Design rules
 
 - Keep the Gateway in the DSH Host plane. It provides a process-level service and must not be moved into an Agent Preset.
