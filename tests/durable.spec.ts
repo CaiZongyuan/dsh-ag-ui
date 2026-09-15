@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { HttpAgent, type Tool } from '@ag-ui/client'
-import { EventType } from '@ag-ui/core'
+import { EventType, RunFinishedEventSchema } from '@ag-ui/core'
 import { ask, lastAssistantText, pendingTool, reservePort, runAgentEvents, waitForServer } from './harness.ts'
 import { durableSessionId } from '../src/session-id.ts'
 
@@ -171,3 +171,29 @@ async function sessionLogPath(root: string, threadId: string): Promise<string> {
 async function readSessionLog(root: string, threadId: string): Promise<string> {
   return readFile(await sessionLogPath(root, threadId), 'utf8')
 }
+
+it('does not restore a human Promise after SIGKILL and accepts cancellation of the stale gate', async () => {
+  const root = await freshRoot()
+  const first = await launch(root)
+  const threadId = 'human-crash'
+  const body = (runId: string, extra: Record<string, unknown> = {}) => ({ threadId, runId, messages: [], tools: [], context: [], state: {}, forwardedProps: {}, ...extra })
+  const post = async (host: Host, input: object) => {
+    const response = await fetch(`${host.base}/ag-ui`, { method: 'POST', headers: { ...HEADERS, 'content-type': 'application/json' }, body: JSON.stringify(input) })
+    expect(response.status).toBe(200)
+    return response.text()
+  }
+  const opened = await post(first, body('first', { messages: [{ id: 'user', role: 'user', content: 'Ask the human.' }] }))
+  const terminal = RunFinishedEventSchema.parse(JSON.parse(opened.trim().split('data: ').at(-1)!))
+  if (terminal.outcome?.type !== 'interrupt') throw new Error('Expected a human interrupt')
+  const interruptId = terminal.outcome.interrupts[0]!.id
+  await drainThenKill(first.child)
+  expect(await readSessionLog(root, threadId)).toContain('fixture-question')
+  const second = await launch(root)
+  const stale = await post(second, body('stale', { resume: [{ interruptId, status: 'resolved', payload: { answers: [{ id: 'confirm', selected: [], custom: 'yes' }] } }] }))
+  expect(stale).toContain('THREAD_INTERRUPTED')
+  const cleared = await post(second, body('cancel', { resume: [{ interruptId, status: 'cancelled' }] }))
+  expect(cleared).toContain('"type":"success"')
+  const fresh = await post(second, body('fresh', { messages: [{ id: 'next-user', role: 'user', content: 'Ping.' }] }))
+  expect(fresh).toContain('pong.')
+  expect(fresh).not.toContain('"type":"TOOL_CALL_START"')
+}, 60_000)

@@ -16,10 +16,10 @@ git clone https://github.com/CaiZongyuan/dsh-ag-ui.git
 cd dsh-ag-ui
 corepack enable
 pnpm install
-pnpm -r --workspace-root check
+pnpm -r --workspace-concurrency=1 --include-workspace-root check
 ```
 
-The repository is a pnpm workspace: the root package is the Gateway, and `packages/` holds the `dsh-ag-ui-cards` React card renderers and the `dsh-ag-ui-adapter` embedding adapter. `pnpm check` inside a package checks that package; `pnpm -r --workspace-root check` checks every workspace project.
+The repository is a pnpm workspace: the root package is the Gateway, and `packages/` holds the `dsh-ag-ui-cards` React card renderers and the `dsh-ag-ui-adapter` embedding adapter. `pnpm check` inside a package checks that package; `pnpm -r --workspace-concurrency=1 --include-workspace-root check` checks every workspace project. Workspace checks run sequentially because adapter checks rebuild the Gateway.
 
 ## Design rules
 
@@ -55,7 +55,7 @@ Document BFF authentication requirements
 ## Releases
 
 - Update `CHANGELOG.md`.
-- Verify `pnpm -r --workspace-root check` and `pnpm -r --workspace-root pack --dry-run`.
+- Verify `pnpm -r --workspace-concurrency=1 --include-workspace-root check` and `pnpm -r --workspace-concurrency=1 --include-workspace-root pack --dry-run`.
 - Create an annotated `vX.Y.Z` tag.
 - Publish with npm provenance from a protected GitHub release workflow or trusted local environment.
 

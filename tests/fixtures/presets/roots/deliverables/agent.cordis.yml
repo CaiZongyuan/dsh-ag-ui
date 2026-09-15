@@ -1,0 +1,4 @@
+- id: isolated-deliverables
+  name: './provider.mjs'
+  isolate:
+    fs: true

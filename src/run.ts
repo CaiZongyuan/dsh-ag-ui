@@ -1,7 +1,7 @@
 import type { ServerResponse } from 'node:http'
 import { once } from 'node:events'
 import { EventEncoder } from '@ag-ui/encoder'
-import { EventType, type BaseEvent, type RunAgentInput } from '@ag-ui/core'
+import { EventType, type BaseEvent, type Interrupt, type RunAgentInput } from '@ag-ui/core'
 import { AgUiGatewayError } from './errors.ts'
 import { utf8Bytes } from './json.ts'
 
@@ -31,6 +31,7 @@ export class RunController {
     readonly record: RunRecord,
     private readonly maxEvents: number,
     private readonly maxBytes: number,
+    private readonly onOverflow?: (controller: RunController) => void,
   ) {
     this.terminalReserveBytes = Math.max(
       eventBytes(this.successEvent()),
@@ -90,6 +91,11 @@ export class RunController {
   /** Finish the run with a successful AG-UI outcome. */
   success(): void {
     this.finish(this.successEvent())
+  }
+
+  /** Finish this HTTP run while its native turn remains suspended. */
+  interrupt(interrupts: readonly Interrupt[]): void {
+    this.finish({ ...this.successEvent(), outcome: { type: 'interrupt', interrupts } })
   }
 
   /**
@@ -168,6 +174,7 @@ export class RunController {
     this.append(terminal, bytes)
     this.record.state = 'completed'
     this.settled.resolve()
+    if (terminal.type === EventType.RUN_ERROR && terminal.code === 'AG_UI_EVENT_BUFFER_OVERFLOW') this.onOverflow?.(this)
   }
 }
 

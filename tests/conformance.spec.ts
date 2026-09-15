@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { HttpAgent } from '@ag-ui/client'
-import { EventType, type BaseEvent, type Tool, type ToolCallResultEvent } from '@ag-ui/core'
+import { EventType, type BaseEvent, type Tool, type ToolCallResultEvent, type ToolCallStartEvent } from '@ag-ui/core'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { disposeMountedContexts, expectLifecycleValid, mountGateway, runAgentEvents } from './harness.ts'
@@ -91,6 +91,7 @@ describe('AG-UI five-feature conformance', () => {
       EventType.TEXT_MESSAGE_START,
       EventType.TEXT_MESSAGE_CONTENT,
       EventType.TEXT_MESSAGE_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     await expectLifecycleValid(events)
@@ -110,11 +111,24 @@ describe('AG-UI five-feature conformance', () => {
     const second = await runAgentEvents(agent, 'history-run-2', [])
 
     const streamedAssistant = first.find(event => event.type === EventType.TEXT_MESSAGE_START)
+    const streamedCall = first.find((event): event is ToolCallStartEvent => event.type === EventType.TOOL_CALL_START)
     const streamedResult = first.find((event): event is ToolCallResultEvent =>
       event.type === EventType.TOOL_CALL_RESULT)
     const snapshot = second.find(event => event.type === EventType.MESSAGES_SNAPSHOT)
     expect(snapshot?.messages).toEqual([
       { id: 'history-user', role: 'user', content: 'Look up record 7.' },
+      {
+        id: streamedCall?.parentMessageId,
+        role: 'assistant',
+        toolCalls: [{
+          id: 'conformance-history-call',
+          type: 'function',
+          function: {
+            name: BACKEND_TOOL.name,
+            arguments: '{"recordId":"record-7"}',
+          },
+        }],
+      },
       {
         id: streamedResult?.messageId,
         role: 'tool',
@@ -148,6 +162,7 @@ describe('AG-UI five-feature conformance', () => {
       EventType.TEXT_MESSAGE_START,
       EventType.TEXT_MESSAGE_CONTENT,
       EventType.TEXT_MESSAGE_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     await expectLifecycleValid(events)
@@ -178,6 +193,7 @@ describe('AG-UI five-feature conformance', () => {
       EventType.TEXT_MESSAGE_START,
       EventType.TEXT_MESSAGE_CONTENT,
       EventType.TEXT_MESSAGE_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     await expectLifecycleValid(events)
@@ -202,6 +218,7 @@ describe('AG-UI five-feature conformance', () => {
       EventType.TOOL_CALL_START,
       EventType.TOOL_CALL_ARGS,
       EventType.TOOL_CALL_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     await expectLifecycleValid(parkEvents)
@@ -220,10 +237,11 @@ describe('AG-UI five-feature conformance', () => {
       EventType.TEXT_MESSAGE_START,
       EventType.TEXT_MESSAGE_CONTENT,
       EventType.TEXT_MESSAGE_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     await expectLifecycleValid(resumeEvents)
-    expect(agent.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'Draft updated. Please review it before submitting.' })
+    expect(agent.messages.findLast(message => message.role === 'assistant')).toMatchObject({ role: 'assistant', content: 'Draft updated. Please review it before submitting.' })
   })
 
   it('several frontend tools in one step park together and resume in subset runs', async () => {
@@ -247,6 +265,7 @@ describe('AG-UI five-feature conformance', () => {
       EventType.TOOL_CALL_START,
       EventType.TOOL_CALL_ARGS,
       EventType.TOOL_CALL_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     await expectLifecycleValid(parkEvents)
@@ -278,10 +297,11 @@ describe('AG-UI five-feature conformance', () => {
       EventType.TEXT_MESSAGE_START,
       EventType.TEXT_MESSAGE_CONTENT,
       EventType.TEXT_MESSAGE_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     await expectLifecycleValid(resumeEvents)
-    expect(agent.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'Both drafts applied within one validated turn.' })
+    expect(agent.messages.findLast(message => message.role === 'assistant')).toMatchObject({ role: 'assistant', content: 'Both drafts applied within one validated turn.' })
   })
 
   it('tool-based generative UI returns a structured payload in a validated tool result', async () => {
@@ -306,6 +326,7 @@ describe('AG-UI five-feature conformance', () => {
       EventType.TEXT_MESSAGE_START,
       EventType.TEXT_MESSAGE_CONTENT,
       EventType.TEXT_MESSAGE_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     await expectLifecycleValid(events)

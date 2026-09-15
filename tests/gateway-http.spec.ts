@@ -1,12 +1,21 @@
-import { request as httpRequest } from 'node:http'
-import { afterEach, describe, expect, it } from 'vitest'
-import type { RunAgentInput, Tool } from '@ag-ui/core'
+import { request as httpRequest, type Server } from 'node:http'
+import { mkdtemp, realpath, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, relative } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { RunFinishedEventSchema, type RunAgentInput, type Tool } from '@ag-ui/core'
+import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { Context } from '@deepseek-ai/cordis'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
+import Approval from '@deepseek-ai/dsh-user-approval'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
-import { ScriptedAdapter, type ScriptedResponse, textResponse } from './scripted-adapter.ts'
+import { ScriptedAdapter, type ScriptedResponse, textResponse, toolResponse } from './scripted-adapter.ts'
 import { mountTestAgentCore } from './agent-core.ts'
-import AgUiGateway, { type Config } from 'dsh-ag-ui'
+import AgUiGateway, { Config as GatewayConfig, type Config } from 'dsh-ag-ui'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { ThreadBinding } from '../src/thread.ts'
+import { durableSessionId } from '../src/session-id.ts'
+
 
 const SECRET = 'test-only-ag-ui-shared-secret'
 const HEADERS = {
@@ -15,26 +24,38 @@ const HEADERS = {
   'x-dsh-user-id': 'user-1',
 }
 
+const PRINCIPAL = { tenantId: 'tenant-1', userId: 'user-1' }
 const contexts: Context[] = []
+const workspaceRoots: string[] = []
+
+function workspaceName(threadId: string): string {
+  return String(durableSessionId(PRINCIPAL, threadId, SECRET))
+}
 
 afterEach(async () => {
   for (const ctx of contexts.splice(0).reverse()) await ctx.fiber.dispose()
+  await Promise.all(workspaceRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
 async function mount(
   overrides: Partial<Config> = {},
   script: ScriptedResponse[] = [textResponse('ok')],
   host: '127.0.0.1' | '0.0.0.0' = '127.0.0.1',
+  workspaceRegistry?: { create(path: string, title?: string): Promise<unknown> },
 ) {
   const ctx = new Context()
   contexts.push(ctx)
   await ctx.plugin(WebServer, { host, port: 0 })
   await mountTestAgentCore(ctx)
+  if (workspaceRegistry !== undefined) ctx.provide('workspaceRegistry', workspaceRegistry)
   ctx.llm.registerAdapter(['scripted'], new ScriptedAdapter(script))
+  const workspaceRoot = overrides.workspaceRoot ?? await mkdtemp(join(tmpdir(), 'ag-ui-http-workspaces-'))
+  if (overrides.workspaceRoot === undefined) workspaceRoots.push(workspaceRoot)
   const gateway = await ctx.plugin(AgUiGateway, {
     provider: 'scripted',
     model: 'scripted',
     sharedSecret: SECRET,
+    workspaceRoot,
     maxRunEvents: 128,
     maxRunEventBytes: 128 * 1024,
     frontendToolTimeoutMs: 10_000,
@@ -87,6 +108,29 @@ async function post(url: string, value: unknown, headers: Record<string, string>
   return result
 }
 
+/** Start one run over a raw socket so a test can order requests, observe the run start, and drop the client. */
+function postStreaming(url: string, value: RunAgentInput) {
+  const started = Promise.withResolvers<void>()
+  const { promise, resolve, reject } = Promise.withResolvers<{ status: number; body: string }>()
+  promise.catch(() => {})
+  const request = httpRequest(url, {
+    method: 'POST',
+    headers: { ...HEADERS, 'content-type': 'application/json' },
+  }, (response) => {
+    started.resolve()
+    const body: Buffer[] = []
+    response.on('data', (chunk: Buffer) => { body.push(chunk) })
+    response.on('end', () => { resolve({ status: response.statusCode ?? 0, body: Buffer.concat(body).toString() }) })
+  })
+  request.on('error', reject)
+  request.end(JSON.stringify(value))
+  return { started: started.promise, result: () => promise, abort: () => { request.destroy() } }
+}
+
+function secondRun(): RunAgentInput {
+  return input({ runId: 'run-2', messages: [{ id: 'message-2', role: 'user', content: 'second' }] })
+}
+
 function expectCode(result: { status: number; body: string }, status: number, code: string): void {
   expect(result.status).toBe(status)
   expect(JSON.parse(result.body)).toMatchObject({ code })
@@ -106,7 +150,16 @@ describe('AG-UI configuration', () => {
     [{ tenantHeader: 'X-Tenant' }, 'identity header names'],
     [{ userHeader: 'bad_header' }, 'identity header names'],
     [{ sharedSecret: 'short' }, 'at least 16 UTF-8 bytes'],
+    [{ workspaceRoot: '' }, 'workspaceRoot must not be empty'],
+
+    [{ maxFileBytes: 0 }, 'maxFileBytes must be positive'],
+
+
+    [{ humanInteractionTimeoutMs: 0 }, 'humanInteractionTimeoutMs must be positive'],
+    [{ humanInteractionTimeoutMs: 2_147_483_648 }, 'humanInteractionTimeoutMs must not exceed 2147483647'],
+    [{ maxPendingInterrupts: Number.MAX_SAFE_INTEGER + 1 }, 'maxPendingInterrupts must be a finite positive integer'],
     [{ maxThreads: 0 }, 'maxThreads must be positive'],
+    [{ maxFilesPerMessage: 0 }, 'maxFilesPerMessage must be positive'],
     [{ threadIdleMs: 0 }, 'threadIdleMs must be positive'],
     [{ maxRunEvents: 1 }, 'maxRunEvents must retain opening and terminal events'],
     [{ maxRunEventBytes: 1 }, 'maxRunEventBytes cannot retain mandatory opening and terminal events'],
@@ -114,10 +167,51 @@ describe('AG-UI configuration', () => {
     await expect(mount(overrides)).rejects.toThrow(message)
   })
 
+  it.each([1, 2_147_483_647])('accepts a human request timeout at the supported boundary: %s', async (humanInteractionTimeoutMs) => {
+    await expect(mount({ humanInteractionTimeoutMs })).resolves.toHaveProperty('gateway')
+  })
+
   it('requires explicit permission for a non-loopback bind', async () => {
     await expect(mount({}, [textResponse('unused')], '0.0.0.0')).rejects.toThrow('non-loopback WebServer bind')
     const allowed = await mount({ allowNonLoopback: true }, [textResponse('ok')], '0.0.0.0')
     expect(allowed.ctx.webServer.host).toBe('0.0.0.0')
+  })
+
+  it('defaults workspaceRoot under DSH home and expands relative and home paths', async () => {
+    const parsed = GatewayConfig({ provider: 'scripted', model: 'scripted', sharedSecret: SECRET })
+    expect(parsed.workspaceRoot).toBe(dshHomePath('workspaces'))
+
+    const root = await mkdtemp(join(tmpdir(), 'ag-ui-config-paths-'))
+    workspaceRoots.push(root)
+    const relativeRoot = join(root, 'relative')
+    const relativeMount = await mount({ workspaceRoot: relative(process.cwd(), relativeRoot) })
+    expect((await post(relativeMount.url, input())).status).toBe(200)
+    expect(relativeMount.ctx.agents.list()[0]?.session.header.cwd)
+      .toBe(await realpath(join(relativeRoot, workspaceName('thread-1'))))
+
+    const priorHome = process.env.HOME
+    process.env.HOME = root
+    try {
+      const homeMount = await mount({ workspaceRoot: '~/home-path' })
+      expect((await post(homeMount.url, input({ threadId: 'thread-home', runId: 'run-home' }))).status).toBe(200)
+      expect(homeMount.ctx.agents.list()[0]?.session.header.cwd)
+        .toBe(await realpath(join(root, 'home-path', workspaceName('thread-home'))))
+    } finally {
+      if (priorHome === undefined) delete process.env.HOME
+      else process.env.HOME = priorHome
+    }
+  })
+
+  it('registers a fresh workspace when the optional host service is present', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ag-ui-registry-workspaces-'))
+    workspaceRoots.push(root)
+    const create = vi.fn(async () => ({}))
+    const mounted = await mount({ workspaceRoot: root }, [textResponse('ok')], '127.0.0.1', { create })
+    expect((await post(mounted.url, input())).status).toBe(200)
+    const cwd = await realpath(join(root, workspaceName('thread-1')))
+    expect(create).toHaveBeenCalledOnce()
+    expect(create).toHaveBeenCalledWith(cwd, workspaceName('thread-1'))
+    expect(cwd).not.toContain('thread-1')
   })
 })
 
@@ -213,14 +307,221 @@ describe('AG-UI gateway lifecycle', () => {
     expect(result.body).toContain('"parentRunId":"parent-1"')
   })
 
+  it('serves the runs of one thread in arrival order', async () => {
+    const gate = Promise.withResolvers<StreamChunk[]>()
+    const { ctx, url } = await mount({}, [gate.promise, textResponse('second-reply')])
+    const debug = vi.spyOn(ctx.logger, 'debug')
+    const first = postStreaming(url, input())
+    await first.started
+    const second = post(url, secondRun())
+    await vi.waitFor(() => { expect(debug).toHaveBeenCalledWith(expect.stringContaining('run-2 waits for the active run')) })
+    gate.resolve(textResponse('first-reply'))
+    const results = await Promise.all([first.result(), second])
+    expect(results.map(result => result.status)).toEqual([200, 200])
+    expect(results[0].body).toContain('first-reply')
+    // the queued run opened after the first reply was durable, so its snapshot already carries it
+    expect(results[1].body).toContain('first-reply')
+    expect(results[1].body).toContain('second-reply')
+    expect(ctx.agents.list()).toHaveLength(1)
+  })
+
   it('shares one pending thread creation across concurrent requests', async () => {
     const { ctx, url } = await mount({}, [textResponse('one')])
     const first = post(url, input())
     const second = post(url, input())
     const results = await Promise.all([first, second])
-    expect(results.map(result => result.status)).toEqual([200, 200])
-    expect(results[1]?.body).toBe(results[0]?.body)
+    expect(results[0]?.status).toBe(200)
+    // A duplicate arriving before completion reports RUN_IN_PROGRESS on the base Gateway.
+    expect([200, 409]).toContain(results[1]?.status)
+    expect((await post(url, input())).body).toBe(results[0]?.body)
     expect(ctx.agents.list()).toHaveLength(1)
+  })
+
+  it('admits several queued runs of one thread without one losing the reservation', async () => {
+    const gate = Promise.withResolvers<StreamChunk[]>()
+    const { ctx, url } = await mount({}, [gate.promise, textResponse('second-reply'), textResponse('third-reply')])
+    const debug = vi.spyOn(ctx.logger, 'debug')
+    const first = postStreaming(url, input())
+    await first.started
+    const second = post(url, secondRun())
+    const third = post(url, input({ runId: 'run-3', messages: [{ id: 'message-3', role: 'user', content: 'third' }] }))
+    await vi.waitFor(() => {
+      expect(debug).toHaveBeenCalledWith(expect.stringContaining('run-2 waits for the active run'))
+      expect(debug).toHaveBeenCalledWith(expect.stringContaining('run-3 waits for the active run'))
+    })
+    gate.resolve(textResponse('first-reply'))
+    const results = await Promise.all([first.result(), second, third])
+    expect(results.map(result => result.status)).toEqual([200, 200, 200])
+    expect(results[2].body).toContain('third-reply')
+  })
+
+  it('replays identical requests that waited behind another run', async () => {
+    const gate = Promise.withResolvers<StreamChunk[]>()
+    const { ctx, url } = await mount({}, [gate.promise, textResponse('second-reply')])
+    const debug = vi.spyOn(ctx.logger, 'debug')
+    const first = postStreaming(url, input())
+    await first.started
+    const second = post(url, secondRun())
+    const duplicate = post(url, secondRun())
+    await vi.waitFor(() => {
+      expect(debug.mock.calls.filter(([message]) => String(message).includes('run-2 waits for the active run'))).toHaveLength(2)
+    })
+    gate.resolve(textResponse('first-reply'))
+    await first.result()
+    const [original, replay] = await Promise.all([second, duplicate])
+    expect(original.status).toBe(200)
+    expect(replay).toEqual(original)
+    expectCode(await post(url, { ...secondRun(), state: { changed: true } }), 409, 'RUN_ID_CONFLICT')
+  })
+
+  it('bounds queued requests and releases a queue slot on disconnect', async () => {
+    const gate = Promise.withResolvers<StreamChunk[]>()
+    const { ctx, url } = await mount({ maxRunsPerThread: 1 }, [gate.promise, textResponse('replacement')])
+    const debug = vi.spyOn(ctx.logger, 'debug')
+    const first = postStreaming(url, input())
+    await first.started
+    const waiting = postStreaming(url, secondRun())
+    await vi.waitFor(() => { expect(debug).toHaveBeenCalledWith(expect.stringContaining('run-2 waits for the active run')) })
+    let overflow: { status: number; body: string } | undefined
+    const rejected = post(url, input({ runId: 'overflow', messages: [{ id: 'overflow-user', role: 'user', content: 'overflow' }] })).then(result => { overflow = result })
+    try {
+      await vi.waitFor(() => { expect(overflow).toBeDefined() })
+      expectCode(overflow!, 429, 'RUN_QUEUE_FULL')
+      waiting.abort()
+      await vi.waitFor(() => { expect(debug).toHaveBeenCalledWith(expect.stringContaining('run-2 left the queue')) })
+      const replacement = post(url, input({ runId: 'replacement', messages: [{ id: 'replacement-user', role: 'user', content: 'replacement' }] }))
+      await vi.waitFor(() => { expect(debug).toHaveBeenCalledWith(expect.stringContaining('replacement waits for the active run')) })
+      gate.resolve(textResponse('first-reply'))
+      expect((await replacement).status).toBe(200)
+    } finally {
+      waiting.abort()
+      gate.resolve(textResponse('first-reply'))
+      await Promise.all([first.result(), rejected])
+    }
+  })
+
+  it('serves a history-only run at once while another run is active', async () => {
+    const gate = Promise.withResolvers<StreamChunk[]>()
+    const { url } = await mount({}, [gate.promise])
+    const first = postStreaming(url, input())
+    await first.started
+    const history = await post(url, input({ runId: 'run-history', messages: [] }))
+    expect(history.status).toBe(200)
+    expect(history.body).toContain('MESSAGES_SNAPSHOT')
+    expect(history.body).toContain('RUN_FINISHED')
+    gate.resolve(textResponse('first-reply'))
+    expect((await first.result()).status).toBe(200)
+  })
+
+  it('history reads do not reset the active run render Tool configuration', async () => {
+    const gate = Promise.withResolvers<StreamChunk[]>()
+    const { ctx, url } = await mount({}, [gate.promise, textResponse('render completed')])
+    const renderTool = { ...TOOL, name: 'draw_surface' }
+    const first = postStreaming(url, input({ tools: [renderTool], forwardedProps: { injectA2UITool: renderTool.name } }))
+    await first.started
+    const history = await post(url, input({ runId: 'history', messages: [] }))
+    expect(history.body).toContain('RUN_FINISHED')
+    gate.resolve(toolResponse('render-call', renderTool.name, {}))
+    const result = await first.result()
+    expect(result.body).toContain('render completed')
+    expect(result.body).toContain('rendered')
+    expect(ctx.agents.list()[0]?.status).toBe('idle')
+  })
+
+  it('rejects a disconnected client after asynchronous thread initialization', async () => {
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const closed = Promise.withResolvers<void>()
+    const initialize = ThreadBinding.prototype.initialize
+    const initialized = vi.spyOn(ThreadBinding.prototype, 'initialize').mockImplementation(async function (this: ThreadBinding) {
+      await initialize.call(this)
+      entered.resolve()
+      await release.promise
+    })
+    const admission = vi.spyOn(ThreadBinding.prototype, 'admit')
+    try {
+      const { ctx, url } = await mount()
+      const server = (ctx.webServer as unknown as { server: Server }).server
+      server.prependOnceListener('request', (_request, response) => { response.once('close', closed.resolve) })
+      const client = postStreaming(url, input())
+      await entered.promise
+      client.abort()
+      await closed.promise
+      release.resolve()
+      await vi.waitFor(() => { expect(admission).toHaveBeenCalledOnce() })
+      await expect(admission.mock.results[0]?.value).rejects.toMatchObject({ code: 'CLIENT_DISCONNECTED' })
+      expect(ctx.agents.list()[0]?.session.snapshotEvents().filter(event => event.type === 'user/message')).toHaveLength(0)
+    } finally {
+      release.resolve()
+      initialized.mockRestore()
+      admission.mockRestore()
+    }
+  })
+
+  it('does not drive a reserved run when the response closes before admission returns', async () => {
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const closed = Promise.withResolvers<void>()
+    const admit = ThreadBinding.prototype.admit
+    const admission = vi.spyOn(ThreadBinding.prototype, 'admit').mockImplementation(async function (this: ThreadBinding, ...args) {
+      const controller = await admit.apply(this, args)
+      entered.resolve()
+      await release.promise
+      return controller
+    })
+    const drive = vi.spyOn(ThreadBinding.prototype, 'drive')
+    const disconnect = vi.spyOn(ThreadBinding.prototype, 'disconnect')
+    try {
+      const { ctx, url } = await mount()
+      const server = (ctx.webServer as unknown as { server: Server }).server
+      server.prependOnceListener('request', (_request, response) => { response.once('close', closed.resolve) })
+      const client = postStreaming(url, input())
+      await entered.promise
+      client.abort()
+      await closed.promise
+      release.resolve()
+      await vi.waitFor(() => { expect(disconnect).toHaveBeenCalledOnce() })
+      expect(drive).not.toHaveBeenCalled()
+      expect(ctx.agents.list()[0]?.session.snapshotEvents().filter(event => event.type === 'user/message')).toHaveLength(0)
+    } finally {
+      release.resolve()
+      admission.mockRestore()
+      drive.mockRestore()
+      disconnect.mockRestore()
+    }
+  })
+
+  it('never admits a queued run whose client left before its turn', async () => {
+    const gate = Promise.withResolvers<StreamChunk[]>()
+    const { ctx, url } = await mount({}, [gate.promise, textResponse('third-reply')])
+    const debug = vi.spyOn(ctx.logger, 'debug')
+    const first = postStreaming(url, input())
+    await first.started
+    const second = postStreaming(url, secondRun())
+    await vi.waitFor(() => { expect(debug).toHaveBeenCalledWith(expect.stringContaining('run-2 waits for the active run')) })
+    second.abort()
+    await vi.waitFor(() => { expect(debug).toHaveBeenCalledWith(expect.stringContaining('run-2 left the queue')) })
+    gate.resolve(textResponse('first-reply'))
+    expect((await first.result()).status).toBe(200)
+    const third = await post(url, input({ runId: 'run-3', messages: [{ id: 'message-3', role: 'user', content: 'third' }] }))
+    expect(third.status).toBe(200)
+    expect(third.body).toContain('third-reply')
+    expect(third.body).not.toContain('second')
+  })
+
+  it('waits for a cancelled turn to settle before admitting the next run', async () => {
+    const gate = Promise.withResolvers<StreamChunk[]>()
+    const { ctx, url } = await mount({}, [gate.promise, textResponse('second-reply')])
+    const debug = vi.spyOn(ctx.logger, 'debug')
+    const first = postStreaming(url, input())
+    await first.started
+    first.abort()
+    const second = post(url, secondRun())
+    await vi.waitFor(() => { expect(debug).toHaveBeenCalledWith(expect.stringContaining('run-2 waits for the Agent')) })
+    gate.resolve(textResponse('first-reply'))
+    const result = await second
+    expect(result.status).toBe(200)
+    expect(result.body).toContain('second-reply')
   })
 
   it('returns backend errors as streamed run failures', async () => {
@@ -233,21 +534,29 @@ describe('AG-UI gateway lifecycle', () => {
 
   it('enforces live thread capacity and reclaims an expired thread', async () => {
     const { ctx, url } = await mount({ maxThreads: 1, threadIdleMs: 20 }, [textResponse('one'), textResponse('two')])
-    expect((await post(url, input())).status).toBe(200)
-    expectCode(await post(url, input({ threadId: 'thread-2', runId: 'run-2', messages: [{ id: 'message-2', role: 'user', content: 'two' }] })), 429, 'THREAD_LIMIT_REACHED')
+    const request = (value: RunAgentInput) => postChunked(url, [JSON.stringify(value)])
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      expect((await request(input())).status).toBe(200)
+      expectCode(await request(input({ threadId: 'thread-2', runId: 'run-2', messages: [{ id: 'message-2', role: 'user', content: 'two' }] })), 429, 'THREAD_LIMIT_REACHED')
 
-    const expired = ctx.agents.list()[0]
-    expect(expired).toBeDefined()
-    await new Promise<void>((resolve) => {
-      const stop = ctx.on('agent/disposed', ({ agent }) => {
-        if (agent === expired) {
-          stop()
-          resolve()
-        }
+      const expired = ctx.agents.list()[0]
+      expect(expired).toBeDefined()
+      const disposed = new Promise<void>((resolve) => {
+        const stop = ctx.on('agent/disposed', ({ agent }) => {
+          if (agent === expired) {
+            stop()
+            resolve()
+          }
+        })
       })
-    })
-    expect(ctx.agents.list()).toEqual([])
-    expect((await post(url, input({ threadId: 'thread-2', runId: 'run-2', messages: [{ id: 'message-2', role: 'user', content: 'two' }] }))).status).toBe(200)
+      await vi.advanceTimersByTimeAsync(20)
+      await disposed
+      expect(ctx.agents.list()).toEqual([])
+      expect((await request(input({ threadId: 'thread-2', runId: 'run-2', messages: [{ id: 'message-2', role: 'user', content: 'two' }] }))).status).toBe(200)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('returns identity only for the exact live Gateway-owned Agent', async () => {
@@ -264,4 +573,33 @@ describe('AG-UI gateway lifecycle', () => {
     await gateway.dispose()
     expect(ctx.agents.list()).not.toContain(agent)
   })
+})
+
+it('serves native interrupts over HTTP and rejects bad resumes before SSE without losing the question', async () => {
+  const { ctx, url } = await mount({ humanInteractionTimeoutMs: 100 }, [toolResponse('effect', 'effect', {}), textResponse('new prompt')])
+  await ctx.plugin(Approval, {})
+  let effects = 0
+  ctx.tools.register({ name: 'effect', description: 'Protected action.', parameters: { type: 'object', properties: {} },
+    output: { schema: { type: 'string' }, render: () => [{ type: 'text', text: 'done' }] },
+    execute: () => { effects++; return Promise.resolve('done') } })
+  ctx.on('tools/pre-execute', () => Promise.resolve({ kind: 'ask', reason: 'May I?' }))
+  const first = await post(url, input())
+  expect(first.status).toBe(200)
+  const terminal = RunFinishedEventSchema.parse(JSON.parse(first.body.trim().split('data: ').at(-1)!))
+  if (terminal.outcome?.type !== 'interrupt') throw new Error('Expected an interrupt')
+  const id = terminal.outcome.interrupts[0]!.id
+  const invalid = input({ runId: 'answer', messages: [], resume: [{ interruptId: id, status: 'resolved', payload: { approved: 'yes' } }] })
+  expectCode(await post(url, invalid), 400, 'INVALID_INTERRUPT_RESPONSE')
+  expectCode(await post(url, invalid), 400, 'INVALID_INTERRUPT_RESPONSE')
+  const foreign = await post(url, input({ runId: 'foreign', messages: [], resume: [{ interruptId: id, status: 'resolved', payload: { approved: true } }] }), { 'x-dsh-user-id': 'another-user' })
+  expect(foreign.status).toBe(200)
+  expect(effects).toBe(0)
+  await ctx.agents.roots()[0]!.whenIdle()
+  expectCode(await post(url, input({ runId: 'late', messages: [], resume: [{ interruptId: id, status: 'resolved', payload: { approved: true } }] })), 409, 'INTERRUPT_UNAVAILABLE')
+  const cancelled = await post(url, input({ runId: 'cancel', messages: [], resume: [{ interruptId: id, status: 'cancelled' }] }))
+  expect(cancelled.body).toContain('"type":"success"')
+  const next = await post(url, secondRun())
+  expect(next.status).toBe(200)
+  expect(next.body).toContain('new prompt')
+  expect(effects).toBe(0)
 })

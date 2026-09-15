@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -24,7 +24,7 @@ const SESSION = durableSessionId(PRINCIPAL, 'thread-resume', SECRET)
 const RC2_SESSION = SessionId('ag-ui-0c27b585ac1d7528dde9c37ee11ef9ff51f4d310')
 const RC2_FIXTURE = fileURLToPath(new URL('./fixtures/sessions/dsh-0.1.1-rc.2.jsonl', import.meta.url))
 
-const OPTIONS: ThreadOptions = {
+const OPTIONS = {
   provider: 'scripted',
   model: 'scripted',
   frontendToolTimeoutMs: 10_000,
@@ -33,7 +33,8 @@ const OPTIONS: ThreadOptions = {
   maxRunEventBytes: 128 * 1024,
   maxRunsPerThread: 4,
   maxStateBytes: 64 * 1024,
-}
+  maxFilesPerMessage: 8,
+} satisfies Omit<ThreadOptions, 'workspaceRoot'>
 
 const roots: string[] = []
 const contexts: Context[] = []
@@ -55,8 +56,11 @@ async function mountDurable(script: ScriptedAdapter['script'], root?: string): P
   return { ctx, adapter, root: durableRoot }
 }
 
-function bindingFor(ctx: Context, sessionId: SessionId = SESSION): ThreadBinding {
-  return new ThreadBinding(ctx, PRINCIPAL, 'thread-resume', sessionId, OPTIONS, () => {})
+function bindingFor(ctx: Context, root: string, sessionId: SessionId = SESSION, workspaceRoot = join(root, 'workspaces')): ThreadBinding {
+  return new ThreadBinding(ctx, PRINCIPAL, 'thread-resume', sessionId, {
+    ...OPTIONS,
+    workspaceRoot,
+  }, () => {})
 }
 
 function input(runId: string, messages: RunAgentInput['messages']): RunAgentInput {
@@ -70,8 +74,11 @@ function eventsOf(controller: ReturnType<ThreadBinding['reserveRun']>) {
 describe('ThreadBinding durable resume', () => {
   it('resumes the persisted session, deduplicates resent history, and keeps identities off disk', async () => {
     const first = await mountDurable([textResponse('The codeword is pine-cone-7.')])
-    const binding = bindingFor(first.ctx)
+    const binding = bindingFor(first.ctx, first.root)
     await binding.initialize()
+    const cwd = await realpath(join(first.root, 'workspaces', String(SESSION)))
+    expect(binding.liveAgent.session.header.cwd).toBe(cwd)
+    expect((await stat(cwd)).isDirectory()).toBe(true)
     const run = binding.reserveRun(input('run-resume-1', [{ id: 'user-resume-1', role: 'user', content: 'Set the codeword.' }]), 'digest-resume-1')
     binding.drive(run)
     await run.done
@@ -89,10 +96,12 @@ describe('ThreadBinding durable resume', () => {
     expect(String(SESSION)).not.toContain('tenant-resume')
     expect(String(SESSION)).not.toContain('thread-resume')
     expect(log).not.toContain('tenant-resume')
+    expect(await readdir(first.root)).not.toContain('_no-cwd')
 
     const second = await mountDurable([textResponse('History kept the codeword pine-cone-7.')], first.root)
-    const resumed = bindingFor(second.ctx)
+    const resumed = bindingFor(second.ctx, second.root)
     await resumed.initialize()
+    expect(resumed.liveAgent.session.header.cwd).toBe(cwd)
     expect(String(resumed.sessionId)).toBe(String(SESSION))
     expect(resumed.liveAgent.session.snapshotEvents().some(item =>
       item.type === 'assistant/message' && JSON.stringify(item.data).includes('pine-cone-7'))).toBe(true)
@@ -123,8 +132,12 @@ describe('ThreadBinding durable resume', () => {
     await copyFile(RC2_FIXTURE, join(sessionDir, 'session.jsonl'))
 
     const mounted = await mountDurable([textResponse('History kept the codeword pine-cone-7.')], root)
-    const resumed = bindingFor(mounted.ctx, RC2_SESSION)
+    const resumed = bindingFor(mounted.ctx, mounted.root, RC2_SESSION)
+    const warn = vi.spyOn(mounted.ctx.logger, 'warn')
     await resumed.initialize()
+    expect(resumed.liveAgent.session.header.cwd).toBeUndefined()
+    expect(warn).toHaveBeenCalledOnce()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('without a workspace cwd'))
     expect(resumed.liveAgent.session.snapshotEvents().some(event =>
       event.type === 'assistant/message' && JSON.stringify(event.data).includes('pine-cone-7'))).toBe(true)
 
@@ -141,7 +154,7 @@ describe('ThreadBinding durable resume', () => {
 
   it('rejects a resent user message whose content changed after the restart', async () => {
     const first = await mountDurable([textResponse('first exchange')])
-    const binding = bindingFor(first.ctx)
+    const binding = bindingFor(first.ctx, first.root)
     await binding.initialize()
     const run = binding.reserveRun(input('run-conflict-1', [{ id: 'user-conflict-1', role: 'user', content: 'original' }]), 'digest-conflict-1')
     binding.drive(run)
@@ -152,7 +165,7 @@ describe('ThreadBinding durable resume', () => {
     contexts.splice(contexts.indexOf(first.ctx), 1)
 
     const second = await mountDurable([textResponse('unreachable')], first.root)
-    const resumed = bindingFor(second.ctx)
+    const resumed = bindingFor(second.ctx, second.root)
     await resumed.initialize()
     const conflict = resumed.reserveRun(input('run-conflict-2', [
       { id: 'user-conflict-1', role: 'user', content: 'edited after restart' },
@@ -166,10 +179,35 @@ describe('ThreadBinding durable resume', () => {
     })
   })
 
+  it('disposes a resumed handle when the configured workspace changed', async () => {
+    const first = await mountDurable([textResponse('persist this session')])
+    const binding = bindingFor(first.ctx, first.root)
+    await binding.initialize()
+    const run = binding.reserveRun(input('run-cwd-mismatch', [
+      { id: 'user-cwd-mismatch', role: 'user', content: 'Persist this session.' },
+    ]), 'digest-cwd-mismatch')
+    binding.drive(run)
+    await run.done
+    await binding.dispose()
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await first.ctx.fiber.dispose()
+    contexts.splice(contexts.indexOf(first.ctx), 1)
+
+    const second = await mountDurable([], first.root)
+    const changedRoot = await mkdtemp(join(tmpdir(), 'ag-ui-changed-workspace-'))
+    roots.push(changedRoot)
+    const resumed = bindingFor(second.ctx, second.root, SESSION, changedRoot)
+    await expect(resumed.initialize()).rejects.toMatchObject({
+      code: 'SESSION_CWD_MISMATCH',
+      status: 409,
+    })
+    expect(second.ctx.agents.list().some(agent => agent.id === SESSION)).toBe(false)
+  })
+
   it('keeps a corrupted persisted artifact loud instead of replacing it', async () => {
     const first = await mountDurable([textResponse('to be corrupted')])
     const sessionId = durableSessionId(PRINCIPAL, 'thread-corrupt', SECRET)
-    const binding = bindingFor(first.ctx, sessionId)
+    const binding = bindingFor(first.ctx, first.root, sessionId)
     await binding.initialize()
     const run = binding.reserveRun(input('run-corrupt-1', [{ id: 'user-corrupt-1', role: 'user', content: 'hello' }]), 'digest-corrupt-1')
     binding.drive(run)
@@ -186,7 +224,7 @@ describe('ThreadBinding durable resume', () => {
 
     const second = await mountDurable([], first.root)
     const create = vi.spyOn(second.ctx.agents, 'create')
-    const replacement = bindingFor(second.ctx, sessionId)
+    const replacement = bindingFor(second.ctx, second.root, sessionId)
     await expect(replacement.initialize()).rejects.toThrow()
     expect(create).not.toHaveBeenCalled()
     expect(await readFile(path, 'utf8')).toBe(lines.join('\n'))

@@ -15,8 +15,9 @@
 - 通过 `ctx.agUi` 暴露的标准 Cordis `Service` 插件
 - 通过 `ctx.browserTools` 暴露的传输无关 Agent-scoped browser Tool broker
 - 可使用 `dsh plugin add` 安装的 DSH Profile Bundle
-- 下限式 AG-UI 协议范围（`~0.0.58`）
+- 下限式 AG-UI 协议范围（`~0.0.59`）
 - 使用可信 tenant/user headers 的 BFF-to-Gateway 认证
+- 按 thread 流式上传文件并通过认证 route 下载
 - `(tenantId, userId, threadId)` 到 DSH Agent 的进程内绑定
 - AG-UI 文本流与 backend Tool result 投影
 - 由 `RunAgentInput.tools` 提供的 Agent-scoped browser Tools
@@ -97,25 +98,51 @@ lease.dispose()
 
 后应用的 Profile patch 会替换 bundle row 的完整 `config`；请包含 deployment 所需的全部配置值。
 
+## 已声明的交付文件
+
+Harness 的 `present` 声明投影为标准 AG-UI `ACTIVITY_SNAPSHOT`，其
+`activityType` 为 `dsh-deliverables`。活动消息的 id 由原生会话和事件序号决定，
+历史读取和重启后保持一致。嵌套的 `present` 成功后，即使外层工具失败，声明仍然保留。
+
+活动 `content` 保留原生 `turn`、`callId` 和 `files: [{ path, description? }]`，
+并为每个文件添加相对 `url`。受信任的 BFF 必须使用与 Agent 运行相同的认证租户和用户头代理此 URL：
+
+```text
+GET /ag-ui/threads/:threadId/deliverables/:eventSeq/files/:fileIndex
+```
+
+此路由仅读取已认证线程中的声明，使用该 Session 的原生文件系统和持久化 cwd，
+包括提供方允许的绝对路径。通过原生 preset roster 查找隔离的文件系统，仅在该 preset 未提供文件系统时使用 Host 文件系统。Host 必须在该 Agent 作用域提供 `@deepseek-ai/dsh-fs`，
+并在需要工具的作用域挂载 `@deepseek-ai/dsh-tool-present`。交付文件不需要附件存储或上传凭据。
+响应以附件下载当前文件，并设置 `Cache-Control: no-store`，不会归档最初的字节内容。
+文件已删除或不是普通文件时返回 404，提供方拒绝读取时返回 403，超过 `maxFileBytes` 时返回 413。
+读取受字节上限约束，并在客户端断开时取消。这些 URL 需要认证，不能用作公开分享链接。
+
+客户端在对话记录中渲染 `dsh-deliverables` 活动。普通文件工具结果和客户端提交的工具消息不会生成交付声明。
+
 ## 配置
 
 `provider`、`model` 和 `sharedSecret` 必填。`sharedSecret` 至少包含 16 个 UTF-8 bytes。
 
 | 字段 | 默认值 | 用途 |
 | --- | --- | --- |
-| `path` | `/ag-ui` | 精确 Host HTTP route |
+| `path` | `/ag-ui` | Run 与 file 使用的 Host HTTP route base |
 | `provider` | 必填 | 已注册 DSH model provider route |
 | `model` | 必填 | Provider 持有的 model ID |
+| `workspaceRoot` | `<DSH_HOME>/workspaces` | 按 durable session id 命名的 thread workspace 目录根路径 |
 | `agentPreset` | 无 | 组合进每个线程的部署级默认 agent preset id |
 | `tenantPresets` | `{}` | 按租户覆盖 `agentPreset` 的 preset id 映射 |
+| `selectableAgentPresets` | `{}` | 每个已认证租户可以为空白线程选择的规范 preset id |
 | `sharedSecret` | 必填 | 仅与可信 BFF 共享的 bearer secret |
 | `tenantHeader` | `x-dsh-tenant-id` | 可信 tenant identity header |
 | `userHeader` | `x-dsh-user-id` | 可信 user identity header |
 | `allowNonLoopback` | `false` | 显式允许非 loopback Host bind |
 | `maxRequestBytes` | `262144` | 最大 request body bytes |
+| `maxFileBytes` | `104857600` | 每个上传文件或交付文件下载的最大 bytes |
 | `maxIdentityBytes` | `256` | 每个 protocol 或 identity ID 的最大 bytes |
 | `maxMessages` | `256` | 每次 request 的最大 message 数量 |
 | `maxMessageBytes` | `524288` | Message JSON 最大总 bytes |
+| `maxFilesPerMessage` | `8` | 每条 user message 的最大非文本 part 数量 |
 | `maxContexts` | `32` | 最大 context entry 数量 |
 | `maxContextBytes` | `131072` | Context JSON 最大总 bytes |
 | `maxTools` | `32` | 最大 browser Tool 数量 |
@@ -126,13 +153,29 @@ lease.dispose()
 | `maxThreads` | `100` | 最大进程内 live threads |
 | `threadIdleMs` | `1800000` | Idle thread lifetime |
 | `frontendToolTimeoutMs` | `300000` | Browser Tool result 最大等待时间 |
+| `humanInteractionTimeoutMs` | `300000` | 每个原生人工请求的最大等待时间；1 至 2147483647 的整数（毫秒） |
+| `maxPendingInterrupts` | `16` | 每个 thread 的最大待处理人工请求数 |
 | `maxRunEvents` | `4096` | 每个 run 最大保留 events |
 | `maxRunEventBytes` | `2097152` | 每个 run 最大保留 event bytes |
-| `maxRunsPerThread` | `32` | 每个 thread 最大 run ledger entries |
+| `maxRunsPerThread` | `32` | 每个 thread 保留的 run ledger entries 上限，同时也分别限制等待请求的数量 |
 
 `agentPreset` 让每个线程的 agent 从宿主的 agent-presets roster 组合而来（需在本 Gateway 之前挂载 roster 插件）；无法解析的 id 会让 Gateway 激活响亮失败，按租户条目覆盖该租户线程的部署默认值，而恢复的线程保持其持久 session 自己记录的组合。不配置 `agentPreset` 时，线程保持宿主组合不变。
 
+每个 thread 使用 `<workspaceRoot>/<sessionId>` 作为 DSH working directory。目录按 durable session id 命名，客户端 thread id 不会落盘。Host 提供 `workspaceRegistry` 时，Gateway 会为 DSH Web 注册新 workspace。
+
+文件路由要求官方 `fileUploads` 和 `attachments` services，`@deepseek-ai/dsh-web-app` 已挂载这两个服务。`POST <path>/threads/<threadId>/files` 流式接收 raw body、`content-length`、可选的 `content-type` 和 percent-encoded `x-file-name`。Harness 负责流式存储、内容哈希、临时文件清理和 staged receipts。响应保留 AG-UI URL source 及 filename/size/sha256 metadata。
+
+客户端更换代理前缀时必须保留返回 URL 的 query。Gateway 为认证 session 的原生文件引用和 receipt 签名。`GET` 校验签名及 principal/thread 映射后调用官方流式 reader。同名上传保留显示名称，但获得不同的 receipt URL。冷恢复后仍可授权下载；轮换 shared secret 会使旧 URL 失效。原生上传接入前的无签名 URL 需要重新上传。
+
+User message 接受有序的 text 和带签名的 thread-file URL parts。图片走官方 image admission，其他文件成为原生 file content parts。Harness 负责 receipt 绑定、成功 admission 后的回收，以及队列投递失败时的回滚。被拒绝的 admission 可以使用仍处于 staged 状态的 receipt 重试。已消费、显式回收或冷启动后尚未发送的 receipt 返回 `FILE_NOT_STAGED`，需要重新上传；Gateway 不会恢复过期授权。`MESSAGES_SNAPSHOT` 保留实际接受的完整 AG-UI parts。异步文件处理后会重新校验 shared-state 和 frontend Tool admission，再发布这些 parts。不接受 inline data parts。
+
+同一租户需要多个 preset 时，宿主可配置 `selectableAgentPresets: { "tenant-1": ["alpha", "beta"] }` 授予选择权限。run 随后可通过 `forwardedProps: { agentPreset: "beta" }` 请求选择。Gateway 在激活时对照 roster 验证授权列表，并在线程的 run reservation 内调用原生 `agentPresets.select`，在首个 turn 前完成选择。roster 本身不授予权限；BFF 仍需认证租户并授权用户访问应用功能。
+
+选择是可选的。省略该字段会保留当前组合；重复当前生效的规范 id 不做任何更改，重启后也一样。不同且未授权的 id 返回 HTTP 403 `PRESET_NOT_ALLOWED`；首个 turn 开始后请求切换到已授权的其他 id 返回 HTTP 409 `PRESET_LOCKED`。仅同步历史的请求不会选择 preset，因此由历史读取创建的 session 仍可在首个工作 run 中选择。原生 session 日志记录实际组合，并在重启后恢复。Gateway 在 SSE 开始前根据所选组合验证 Tool 名称。若选择成功后该验证拒绝 run 或客户端断开，已记录的选择会保留；用户 turn 不会启动，空白 session 仍可再次选择。
+
 `maxRunEvents` 必须至少容纳 mandatory opening 与 terminal events。`maxRunEventBytes` 会限制包含 `RUN_STARTED` 和 terminal event 在内的完整 retained Run record，并且必须足以容纳已配置的最大 identity length。非 loopback DSH WebServer 需要设置 `allowNonLoopback: true`。推荐把 Gateway 保持在 loopback，并放在同 Host 的 authenticated BFF 后面。
+
+开始和结束时的持久化历史快照都会计入该上限。事件缓冲区溢出会结束 HTTP run，并且只取消该 run 当前已领取的原生 turn。只读历史请求溢出不会取消其他活跃 turn。已完成的重复请求仍精确重放所保留的 events。
 
 ## 架构
 
@@ -209,20 +252,23 @@ BFF 持有 login、session、CSRF、tenant policy、resource authorization、aud
 
 AG-UI gateway 只是众多带 HTTP remote 的 Host-plane service 之一；其他 DSH 服务插件也可以在同一个环回 webserver 上挂载路由。同一条规则覆盖所有这些 remote：浏览器永远不直接访问 Host。每个 remote 都经应用 backend 暴露在应用自己的路由之下，采用上文"认证 → 授权 → 转发"的形态并附带该服务期望的凭据。Host 端口本身保持 loopback，也不向客户端公开。
 
-## 浏览器客户端
+## AG-UI 客户端
 
-在 frontend application 中安装官方 client。支持协议范围（`>=0.0.58 <0.1.0`）内的任意版本均可；网关不要求 client 精确锁版：
+Gateway wire protocol 接受支持范围（`>=0.0.59 <0.1.0`）内的官方 client，并不要求精确锁版。Gateway 自带的 `DshHttpAgent` companion 已针对 `@ag-ui/client ~0.0.59` 测试并声明 peer：
 
 ```bash
-pnpm add @ag-ui/client
+pnpm add dsh-ag-ui @ag-ui/client@~0.0.59
 ```
+
+可选的 Gateway client companion 从 HTTP input 中省略展示消息，同时保留所有 user 与 Tool messages，以及 A2UI middleware 添加的最后一对 synthetic messages。Agent 仍保留完整本地 history，供渲染器与 middleware 使用；标准 `HttpAgent` 也可以直接发送完整 history。
 
 在每个 run 中发送页面相关的 browser Tools 与当前 context：
 
 ```ts
-import { HttpAgent, randomUUID } from '@ag-ui/client'
+import { randomUUID } from '@ag-ui/client'
+import { DshHttpAgent } from 'dsh-ag-ui/client'
 
-const agent = new HttpAgent({
+const agent = new DshHttpAgent({
   url: '/api/agent',
   threadId: 'application-thread-123',
 })
@@ -244,9 +290,40 @@ await agent.runAgent({
 })
 ```
 
+Assistant messages 不能确认此前的 input 已被接受，因此 companion 不会根据位置丢弃 user messages。Gateway 按 ID 去重已接受的 messages。大量 user 与 Tool history 仍计入配置的 HTTP request-body limit；companion 不保证请求大小有界。
+
 模型调用 browser-owned Tool 时，当前 HTTP run 成功结束，但 DSH Tool Promise 仍然 pending。浏览器执行 Tool、追加一条使用相同 `toolCallId` 的标准 AG-UI ToolMessage，再开始另一个 run。Gateway resolve 原始 Promise，并继续同一个 DSH turn。
 
+官方 `@ag-ui/a2ui-middleware` 使用同一套原生 contract。middleware 直接根据流式 Tool 参数渲染，从不发送浏览器 result，因此 Gateway 不会 park 它在 `forwardedProps.injectA2UITool` 中标记的 render Tool：该调用立即以 `{"status":"rendered"}` 结算，result 在同一个 run 内流出，DSH turn 继续执行。客户端自行注册的 render Tool 仍像其他浏览器 Tool 一样 park。之后的 `forwardedProps.a2uiAction` 会作为 durable plugin context 开启下一个 turn。该 context 同时保留可读的 middleware result 与完整、已校验的 action JSON（包括可选 timestamp），并递归排序对象键。Gateway 只接受 middleware 的精确有界 action envelope，以及末尾匹配的 `log_a2ui_event` assistant/Tool pair；它不会把任意 assistant history 导入 DSH。
+
+Synthetic result message ID 在原生 inbox 与持久化日志中标识该 action。同一对已生成的 messages 在不同 HTTP run ID 或重启后重试时保持幂等；同一 identity 携带不同 action 内容会被拒绝。每次新点击必须使用新的 result ID，即使 payload 与之前相同。Middleware 重试必须保留已生成的 pair identities。
+
 普通 browser Tool result 不要通过 AG-UI `resume[]` 发送；该字段保留给显式 interrupt/HITL flow。
+
+### 原生问题与审批
+
+在 Host profile 中挂载原生 `@deepseek-ai/dsh-user-questions` 和/或 `@deepseek-ai/dsh-user-approval` 服务。业务 preset 可挂载官方 `@deepseek-ai/dsh-tool-ask-user` Tool。Gateway 只响应自己拥有的精确 live root Agent，不安装服务、不替换审批策略，也不处理子 Agent 的问题。
+
+原生人工请求以 `RUN_FINISHED` 和 `outcome: {type: "interrupt", interrupts: [...]}` 结束当前 HTTP run。Harness turn 仍等待原来的 Promise。在同一 thread 使用新的 `runId` 和 `resume[]` 作答：
+
+```json
+{
+  "threadId": "thread-1",
+  "runId": "answer-1",
+  "messages": [], "tools": [], "context": [], "state": {}, "forwardedProps": {},
+  "resume": [{"interruptId": "<published-id>", "status": "resolved", "payload": {"approved": true}}]
+}
+```
+
+审批使用 `reason: "approval"`、可选的原生 `toolCallId`，以及 `{approved: boolean}` 响应。`false` 拒绝本次操作；`status: "cancelled"` 撤回请求。只有原生服务能授予 `allowed-once`；其 `never` 策略仍直接拒绝，不弹出问题。Gateway 不授予永久权限，也不伪造 backend Tool result。
+
+问题使用 `reason: "user_question"`。`metadata.dsh.questions` 包含原生问题、选项和可选 intent，`responseSchema` 描述答案结构。响应为 `{answers: [{id, selected: ["选项标签"], custom?: "文本"}]}`。每个问题必须恰好回答一次。单选接受一个选项或自定义文本，多选允许两者共存。取消通过原生 `ASK_ABORTED` 错误结束问题。
+
+每个已发布 interrupt 必须在 resume batch 中出现一次。Gateway 在 SSE、消息接纳、context/state 修改和消费答案之前完成整个 batch 的验证。无效 batch 不改变等待中的工作。新 user message 不能与人工响应混用；同一 turn 中已经就绪的 frontend Tool result 可以一并提交。未知 interrupt id 只在已认证 thread 内记录并忽略。保留中的相同 run id 只重放，不会重复作答。
+
+History-only run 重复相同的已发布 interrupt id 和 shared-state snapshot。后到的原生问题等待下次已接纳 continuation，reload 不扩展另一个标签页已有的表单。如果原生问题出现在 frontend Tool 的 HTTP run 结束之后，下次 continuation 或 history read 会发布它。
+
+每个请求有独立且有限的服务器期限，reconnect 不延长期限。超时、原生 abort、overflow 或 dispose 会取消等待中的工作。对已知过期请求提交 resolved 会得到 `INTERRUPT_UNAVAILABLE`；提交 `status: "cancelled"` 可清除客户端旧 gate，且不会执行任何操作。当前客户端也拒绝取消已过期 interrupt，因此暂不发送 `expiresAt`。
 
 ## Shared state
 
@@ -303,12 +380,18 @@ Upstream Dojo 的 integration registry 是静态源码，目前没有 `deepseek-
 ## HTTP 与 run 语义
 
 - Request 必须为 `POST application/json`，并且符合 AG-UI `RunAgentInput`。
-- 普通 run 接受一条新的 text user message。
+- 普通 run 接受一条或多条包含文本或受支持 content parts 的新 user message，它们按到达顺序进入同一个 DSH turn。没有新消息的 run（包括重发完整已接纳 transcript）只返回历史 snapshot，不会在活跃 run 后面等待。
 - Continuation 接受属于一个 pending DSH turn 的一条或多条新 frontend ToolMessages。
+- 官方 A2UI user-action run 接受经过校验的 `a2uiAction` envelope 与匹配的 synthetic `log_a2ui_event` pair；它也可以同时携带客户端自有 pending `render_a2ui` 调用的 result。
+- middleware 在 `forwardedProps.injectA2UITool` 中标记的 render Tool 会在其 run 内以 `{"status":"rendered"}` 结算，从不 park。
+- 已认证 pending frontend Tool result 上的标准对象 metadata 会通过原生 DSH presentation metadata 持久化，并由后续 message snapshot 返回；没有 metadata 的结果在 wire 上保持不变。
 - 一个 DSH turn 可以跨多个 AG-UI HTTP runs。
 - 每个 run 发出一个 `RUN_STARTED` 和恰好一个 `RUN_FINISHED` 或 `RUN_ERROR`。
-- `runId` 是 exact-request idempotency key。已完成的相同 request 会重放 retained events，不再次驱动 DSH。
-- 一个 thread 同时只能有一个 active HTTP run。
+- frontend call 等待期间，native turn 可以在 HTTP response 结束后继续存在。持久化结果、共享状态更新和 turn 结束事件仍会更新 thread projection。无效的 continuation 不会消费 pending call，客户端可修正后重试。
+- user batch 失败时会取消 native inbox 中的待处理输入。已丢弃且尚未 claimed 的消息可以沿用原 message ID 重试；已 claimed 的消息保持 accepted，包括重启之后。失败的 run ID 仍重放原错误，因此重试输入须使用新的 run ID。
+- `runId` 是 exact-request idempotency key。已完成的相同 request（包括只读历史 run）会重放 retained events，不再次驱动 DSH。所有 run 共用有界 ledger；活跃记录不会被淘汰，ledger 已满时以 `429 RUN_LEDGER_FULL` 拒绝 admission。
+- 每个 thread 最多允许 `maxRunsPerThread` 个请求排队等待，超出时返回 `429 RUN_QUEUE_FULL`。等待客户端断开连接会释放队列位置。排队请求在被接纳或断开连接前阻止 thread 空闲过期，包括等待已取消的原生 turn 收敛期间。一起排队的相同请求会重放同一份保留结果，不会重复驱动 DSH。
+- 一个 thread 同时只驱动一个 HTTP run。在另一个 run 活跃时到达的 run 会等待它以及 Agent turn 结束，因此同一 thread 的 runs 按到达顺序执行；等待中断开连接的客户端不会被接纳。
 - Active shared-state run 会在 model events 前发送 synchronization snapshot。
 - 一个 DSH step 可挂起多个 frontend Tool call；续跑可只回答其中一部分。
 
@@ -344,6 +427,8 @@ Backend Tool result 会发出 `TOOL_CALL_RESULT`。Frontend Tool result 不在 A
 - 保留 Tool `ag_ui_update_state` 与客户端提供的 frontend Tool 被排除：state Tool 经 `STATE_SNAPSHOT` 投影，客户端本来就了解如何呈现自己的 Tool。
 - 每个 run 开始时，Gateway 会从 durable session log 重新推导整个转录的已结算 card——与 live 路径使用相同的求值器与输入——并在 `MESSAGES_SNAPSHOT` 之后立即发出，因此错过 live 流的客户端也能渲染出完全一致的 card。冷读取只会为仍在该 thread scope 内可解析的 Tool 重新推导 card，因此重启后由崩溃恢复物化的 frontend Tool 调用不会带 card。card 计入 run 的事件预算。
 
+保留的 `ag_ui_update_state` 调用与结果仅用于协议状态管理，不会出现在实时事件或恢复的消息历史中。
+
 独立的 [`dsh-ag-ui-cards`](packages/dsh-ag-ui-cards) React 包基于这些 envelope 渲染全部 card 种类，不依赖任何 DSH runtime，并给出了事件接线配方。其组件测试渲染录制自本 Gateway 的事件，录制场景由本仓库的测试套件持续守护。
 
 ## 生命周期
@@ -356,11 +441,12 @@ Backend Tool result 会发出 `TOOL_CALL_RESULT`。Frontend Tool result 不在 A
 
 | 组件 | 支持版本 |
 | --- | --- |
-| AG-UI core/client/encoder | `>=0.0.58 <0.1.0`（`~0.0.58`；已用 `0.0.58` 验证） |
+| AG-UI core/client/encoder | `>=0.0.59 <0.1.0`（`~0.0.59`；已用 `0.0.59` 验证） |
+| `dsh-ag-ui/client` companion | `@ag-ui/client ~0.0.59` |
 | Node.js | `^22.19.0` 或 `>=24.0.0` |
-| DeepSeek Harness | `0.1.5-alpha.1`（精确的 developer-preview peers） |
+| DeepSeek Harness | `0.1.5-rc.2`（精确的 developer-preview peers） |
 
-DSH `0.1.5-alpha.1` 使用 v3 会话日志。实时文本通过 `agent/assistant-stream` 接收，已结算历史通过 `snapshotEvents()` 读取。配置 JSONL 持久化插件后，DSH 在恢复时迁移旧日志（已用 `0.1.1-rc.2` 录制验证）。图片和文件 Tool 结果分别投影为 `[image result]` 和 `[file result]` 占位符，不传输附件字节。
+DSH `0.1.5-rc.2` 使用 v3 会话日志。实时文本通过 `agent/assistant-stream` 接收，已结算历史通过 `snapshotEvents()` 读取。配置 JSONL 持久化插件后，DSH 在恢复时迁移旧日志（已用 `0.1.1-rc.2` 录制验证）。图片和文件 Tool 结果分别投影为 `[image result]` 和 `[file result]` 占位符，不传输附件字节。
 
 DSH 仍处于 developer preview，可能引入 breaking changes。在这些 API 稳定前，本 package 使用精确 DSH peer versions。
 
@@ -412,10 +498,12 @@ Tool set 不变时保留 Tool-schema prefix。添加、删除或修改 Tool 可�
 
 - 活跃 thread 绑定、run 重放缓冲和 shared state 保存在进程内；会话历史可通过 Host 持久化插件保留。
 - Host 重启后通过 `agents.resume()` 恢复已保存的会话。不会恢复挂起的 browser Tool：被中断的回合返回 `THREAD_INTERRUPTED`，shared state 需要新的 client baseline。
-- 只适配 text user input、assistant text 和 string Tool results。
+- Assistant messages 和 Tool results 投影为文本；文件交付物使用单独的 activity。
 - 不支持 partial SSE reconnect。
-- 尚未适配 `STATE_DELTA`、AG-UI interrupt/HITL `resume[]`、multimodal messages、reasoning events 和 activity events。
+- 尚未适配 `STATE_DELTA` 和 reasoning events。
 - Shared-state update 使用 top-level shallow merge，不提供 version、deep merge 或 conflict resolution。
+
+人工交互仅支持 root Agent；重启不恢复等待中的人工 Promise，使用现有 `THREAD_INTERRUPTED` 恢复流程。History-only run 可重新读取问题，但不支持部分 SSE 重连。如果 embedding adapter 启用 `idleShutdownMs`，其独立的子进程关闭策略可能中断人工等待；需要继续同一 live turn 时应保持 auto-shutdown 关闭。
 
 ## 开发
 
@@ -424,10 +512,10 @@ git clone https://github.com/CaiZongyuan/dsh-ag-ui.git
 cd dsh-ag-ui
 corepack enable
 pnpm install
-pnpm -r --workspace-root check
+pnpm -r --workspace-concurrency=1 --include-workspace-root check
 ```
 
-本仓库是 pnpm workspace：根 package 即 Gateway，`packages/` 下是 `dsh-ag-ui-cards` React card 渲染包与 `dsh-ag-ui-adapter` 嵌入适配包。`pnpm -r --workspace-root check` 会在每个 workspace project 内运行 lint、strict TypeScript、per-file coverage、runtime/type builds 和 publint。Dojo fixture 仅用于 source checkout，不包含在 npm tarball 中。
+本仓库是 pnpm workspace：根 package 即 Gateway，`packages/` 下是 `dsh-ag-ui-cards` React card 渲染包与 `dsh-ag-ui-adapter` 嵌入适配包。`pnpm -r --workspace-concurrency=1 --include-workspace-root check` 会在每个 workspace project 内运行 lint、strict TypeScript、per-file coverage、runtime/type builds 和 publint。Dojo fixture 仅用于 source checkout，不包含在 npm tarball 中。
 
 贡献和发布要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 

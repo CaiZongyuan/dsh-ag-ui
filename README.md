@@ -15,8 +15,9 @@ A community [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 
 - Standard Cordis `Service` plugin exposed as `ctx.agUi`
 - Transport-neutral Agent-scoped browser Tool broker exposed as `ctx.browserTools`
 - Installable DSH Profile Bundle through `dsh plugin add`
-- Floored AG-UI protocol range (`~0.0.58`)
+- Floored AG-UI protocol range (`~0.0.59`)
 - Authenticated BFF-to-Gateway requests with trusted tenant and user headers
+- Streamed per-thread file upload and authenticated download routes
 - Process-local `(tenantId, userId, threadId)` bindings to DSH Agents
 - AG-UI text streaming and backend Tool result projection
 - Agent-scoped browser Tools supplied by `RunAgentInput.tools`
@@ -97,25 +98,59 @@ Environment variables are the shortest setup path. A Profile can instead overrid
 
 A later Profile patch replaces the bundle row's complete `config`; include every value that deployment needs.
 
+## Presented deliverables
+
+Harness `present` declarations become standard AG-UI `ACTIVITY_SNAPSHOT` events with
+`activityType: "dsh-deliverables"`. Their activity messages survive history reads and
+restart with the same id, derived from the native session and event sequence. Nested
+`present` calls are included even if their enclosing tool later fails.
+
+Activity `content` preserves native `turn`, `callId`, and `files: [{ path, description? }]`,
+adding a relative `url` to each file. A trusted BFF must proxy this URL with the same
+authenticated tenant and user headers as agent runs:
+
+```text
+GET /ag-ui/threads/:threadId/deliverables/:eventSeq/files/:fileIndex
+```
+
+The route reads only a declaration from that authenticated thread. It uses the Session's
+native filesystem and persisted cwd, including absolute paths the provider permits.
+Preset-isolated filesystems are resolved through the native preset roster; the host
+filesystem is used only when that preset supplies none.
+The host must supply `@deepseek-ai/dsh-fs` in that Agent scope and mount
+`@deepseek-ai/dsh-tool-present` where the tool should be available. No attachment store
+or upload receipt is needed for a deliverable. The response downloads the current file
+as an attachment with `Cache-Control: no-store`; it does not archive the original bytes.
+Deleted files and non-regular files return 404, provider access denials return 403,
+and files exceeding `maxFileBytes` return 413. Reads are bounded and cancelled when the
+client disconnects. The URLs are authenticated references, not public sharing links.
+
+Render `dsh-deliverables` activities in the client's transcript. They do not turn generic
+file tool results or client-supplied tool messages into declared deliverables.
+
 ## Configuration
 
 `provider`, `model`, and `sharedSecret` are required. `sharedSecret` must contain at least 16 UTF-8 bytes.
 
 | Field | Default | Purpose |
 | --- | --- | --- |
-| `path` | `/ag-ui` | Exact Host HTTP route |
+| `path` | `/ag-ui` | Base Host HTTP route for runs and files |
 | `provider` | required | Registered DSH model provider route |
 | `model` | required | Model ID owned by the provider |
+| `workspaceRoot` | `<DSH_HOME>/workspaces` | Root for per-thread workspace directories, named by durable session id |
 | `agentPreset` | none | Deployment-default agent preset id composed into every thread |
 | `tenantPresets` | `{}` | Per-tenant preset ids taking precedence over `agentPreset` |
+| `selectableAgentPresets` | `{}` | Canonical preset ids each authenticated tenant may select for a blank thread |
 | `sharedSecret` | required | Bearer secret shared only with the trusted BFF |
 | `tenantHeader` | `x-dsh-tenant-id` | Trusted tenant identity header |
 | `userHeader` | `x-dsh-user-id` | Trusted user identity header |
 | `allowNonLoopback` | `false` | Permit a non-loopback Host bind explicitly |
 | `maxRequestBytes` | `262144` | Maximum request body bytes |
+| `maxFileBytes` | `104857600` | Maximum bytes per uploaded file or deliverable download |
 | `maxIdentityBytes` | `256` | Maximum bytes per protocol or identity ID |
 | `maxMessages` | `256` | Maximum message count per request |
 | `maxMessageBytes` | `524288` | Maximum combined message JSON bytes |
+| `maxFilesPerMessage` | `8` | Maximum non-text parts in one user message |
 | `maxContexts` | `32` | Maximum context entry count |
 | `maxContextBytes` | `131072` | Maximum combined context JSON bytes |
 | `maxTools` | `32` | Maximum browser Tool count |
@@ -126,13 +161,29 @@ A later Profile patch replaces the bundle row's complete `config`; include every
 | `maxThreads` | `100` | Maximum process-local live threads |
 | `threadIdleMs` | `1800000` | Idle thread lifetime |
 | `frontendToolTimeoutMs` | `300000` | Maximum browser Tool result wait |
+| `humanInteractionTimeoutMs` | `300000` | Maximum wait for each native human request; integer from 1 to 2147483647 ms |
+| `maxPendingInterrupts` | `16` | Maximum live human requests per thread |
 | `maxRunEvents` | `4096` | Maximum events retained per run |
 | `maxRunEventBytes` | `2097152` | Maximum retained event bytes per run |
-| `maxRunsPerThread` | `32` | Maximum retained run ledger entries per thread |
+| `maxRunsPerThread` | `32` | Maximum retained run ledger entries and, separately, waiting requests per thread |
 
 `agentPreset` composes each thread's agent from the host's agent-presets roster (mount the roster plugin before this Gateway); an unresolvable id fails Gateway activation loudly, a per-tenant entry overrides the deployment default for that tenant's threads, and a resumed thread keeps the composition its own durable session recorded. Without `agentPreset`, threads keep the host composition unchanged.
 
+Each thread uses `<workspaceRoot>/<sessionId>` as its DSH working directory. The directory is named by the durable session id, so client thread ids stay off disk. When the Host provides `workspaceRegistry`, the Gateway registers new workspaces for DSH Web.
+
+File routes require the official `fileUploads` and `attachments` services, already mounted by `@deepseek-ai/dsh-web-app`. `POST <path>/threads/<threadId>/files` streams the raw body with `content-length`, optional `content-type`, and percent-encoded `x-file-name`. Harness owns streamed storage, content hashes, temporary-file cleanup, and staged receipts. The response retains its AG-UI URL source and filename/size/sha256 metadata.
+
+Clients must preserve the returned URL query when changing a proxy prefix. The gateway signs the native file reference and receipt for the authenticated session. `GET` verifies the signature and principal/thread mapping before calling the official streamed reader. Same-name uploads keep their display name and receive distinct receipt URLs. Downloads remain authorized after cold resume; rotating the shared secret invalidates old URLs. Pre-native unsigned upload URLs require a fresh upload.
+
+User messages accept ordered text and signed thread-file URL parts. Images use official image admission; other files become native file content parts. Harness owns receipt binding, successful admission retirement, and rollback when queue delivery fails. Rejected admission can retry its still-staged receipt. A consumed, explicitly retired, or cold unsent receipt returns `FILE_NOT_STAGED` and requires re-upload; the gateway never restores expired authority. `MESSAGES_SNAPSHOT` preserves the exact accepted AG-UI parts. Shared-state and frontend Tool admission are revalidated after asynchronous file processing, before publishing those parts. Inline data parts are not accepted.
+
+For multiple presets within one tenant, the host can grant selection with `selectableAgentPresets: { "tenant-1": ["alpha", "beta"] }`. A run may then request `forwardedProps: { agentPreset: "beta" }`. The Gateway validates grants against the roster at activation and calls native `agentPresets.select` under the thread's run reservation before its first turn. The roster alone grants no authority, and the BFF must still authenticate the tenant and authorize access to its application features.
+
+Selection is optional. Omitting it preserves the current composition; repeating the effective canonical id is a no-op, including after restart. A different ungranted id fails with HTTP 403 `PRESET_NOT_ALLOWED`; a granted change after the first turn fails with HTTP 409 `PRESET_LOCKED`. A history-only request never selects a preset, so a session created by a history read can still choose one on its first work run. The native session log owns the selected composition and restores it after restart. Tool names are validated against the selected composition before SSE starts. A successful selection remains recorded if that validation rejects the run or its client disconnects; no user turn is started, and the blank session can select again.
+
 `maxRunEvents` must retain at least the mandatory opening and terminal events. `maxRunEventBytes` bounds the complete retained Run record, including `RUN_STARTED` and its terminal event, and must be large enough for the configured maximum identity length. A non-loopback DSH WebServer requires `allowNonLoopback: true`. Prefer a loopback Gateway behind a same-host authenticated BFF.
+
+Opening and final durable history snapshots both count toward this bound. Buffer overflow ends the HTTP run and cancels only its currently claimed native turn. An overflowing history-only read does not cancel another active turn. Completed duplicate requests still replay the exact retained events.
 
 ## Architecture
 
@@ -209,20 +260,23 @@ The BFF owns login, sessions, CSRF protection, tenant policy, resource authoriza
 
 The AG-UI gateway is one Host-plane service with an HTTP remote; other DSH service plugins can mount routes on the same loopback webserver. The same rule covers every one of them: the browser never reaches the Host directly. Expose each remote through the application backend under an application-owned route, with the authenticate → authorize → forward shape above and the credentials that service expects. The Host port itself stays loopback and unadvertised to clients.
 
-## Browser client
+## AG-UI client
 
-Install the official client in the frontend application. Any release in the supported protocol range (`>=0.0.58 <0.1.0`) works; the gateway never requires an exact client pin:
+The Gateway wire protocol accepts official clients in the supported range (`>=0.0.59 <0.1.0`) and does not require an exact pin. The Gateway-owned `DshHttpAgent` companion is tested and peered with `@ag-ui/client ~0.0.59`:
 
 ```bash
-pnpm add @ag-ui/client
+pnpm add dsh-ag-ui @ag-ui/client@~0.0.59
 ```
+
+The optional Gateway-owned client companion omits presentation messages from HTTP input while retaining every user and Tool message. It preserves the final synthetic pair added by A2UI middleware. The agent keeps its complete local history for rendering and middleware; standard `HttpAgent` with full history is also supported.
 
 Send page-specific browser Tools and current context on every run:
 
 ```ts
-import { HttpAgent, randomUUID } from '@ag-ui/client'
+import { randomUUID } from '@ag-ui/client'
+import { DshHttpAgent } from 'dsh-ag-ui/client'
 
-const agent = new HttpAgent({
+const agent = new DshHttpAgent({
   url: '/api/agent',
   threadId: 'application-thread-123',
 })
@@ -244,9 +298,40 @@ await agent.runAgent({
 })
 ```
 
+Assistant messages do not acknowledge earlier input, so the companion never discards user messages based on their position. The Gateway deduplicates accepted messages by ID. Large user and Tool histories still count toward the configured HTTP request-body limit; this companion does not guarantee bounded request size.
+
 If the model calls a browser-owned Tool, the current HTTP run finishes successfully while the DSH Tool Promise remains pending. The browser executes the Tool, appends one standard AG-UI ToolMessage with the same `toolCallId`, and starts another run. The Gateway resolves the original Promise and continues the same DSH turn.
 
+The official `@ag-ui/a2ui-middleware` renders from the streamed Tool arguments and never sends a browser result. The Gateway therefore does not park the render Tool the middleware flags in `forwardedProps.injectA2UITool`: the call settles at once with `{"status":"rendered"}`, its result streams in the same run, and the DSH turn continues. A render Tool a client registers itself still parks like any browser-owned Tool. A later `forwardedProps.a2uiAction` starts the next turn as durable plugin context. That context keeps the readable middleware result plus the complete validated action JSON, including its optional timestamp, with recursively sorted object keys. The Gateway accepts only the middleware's exact bounded action envelope and matching final `log_a2ui_event` assistant/Tool pair; it does not import arbitrary assistant history into DSH.
+
+The synthetic result message ID identifies the action in the native inbox and durable log. Redelivery of the same formed pair is idempotent across HTTP run IDs and restarts; reusing that identity with changed action content is rejected. Each new click needs a new result ID, even when its payload matches an earlier click. Middleware retries must preserve the formed pair identities.
+
 Do not send ordinary browser Tool results through AG-UI `resume[]`; that field is reserved for explicit interrupt/HITL flows.
+
+### Native questions and approvals
+
+Mount the native `@deepseek-ai/dsh-user-questions` and/or `@deepseek-ai/dsh-user-approval` services in the Host profile. A business preset can mount the official `@deepseek-ai/dsh-tool-ask-user` Tool. The Gateway answers requests only for its exact live root Agent; it does not install the services, replace their policies, or handle subagent questions.
+
+A native human request ends the HTTP run with `RUN_FINISHED` and `outcome: {type: "interrupt", interrupts: [...]}`. The Harness turn continues waiting on its original Promise. Submit a fresh `runId` in the same thread with `resume[]` to answer it:
+
+```json
+{
+  "threadId": "thread-1",
+  "runId": "answer-1",
+  "messages": [], "tools": [], "context": [], "state": {}, "forwardedProps": {},
+  "resume": [{"interruptId": "<published-id>", "status": "resolved", "payload": {"approved": true}}]
+}
+```
+
+Approval interrupts use `reason: "approval"`, optional native `toolCallId`, and `{approved: boolean}` as their response. `false` rejects this action; `status: "cancelled"` withdraws the request. Only the native service can grant `allowed-once`, and its `never` policy still rejects without prompting. Gateway responses never grant lasting permission or manufacture backend Tool results.
+
+Question interrupts use `reason: "user_question"`. `metadata.dsh.questions` contains the native questions, options and optional intent; `responseSchema` describes the answer structure. Respond with `{answers: [{id, selected: ["option label"], custom?: "text"}]}`. Answer every question exactly once. Single-select questions accept one option or custom text; multi-select permits both. A cancelled question rejects through the native `ASK_ABORTED` error.
+
+Every published interrupt must appear once in a resume batch. Validation precedes SSE, message admission, context/state changes and answer consumption. Invalid batches leave the pending work untouched. New user messages cannot share a run with human responses; already-ready frontend Tool results of the same turn can. Unknown interrupt ids are logged and ignored within the authenticated thread. Retained identical run ids replay without answering twice.
+
+A history-only run repeats the same published interrupt ids and shared-state snapshot. Later native questions wait for the next accepted continuation; reload does not enlarge a form another tab already received. A newly discovered question may follow a frontend Tool's completed HTTP run; the next continuation or history read publishes it.
+
+Each request has a finite server deadline, unaffected by reconnect. Timeout, native abort, overflow or disposal cancels the waiting work. A known expired resolved response returns `INTERRUPT_UNAVAILABLE`; send `status: "cancelled"` to clear that stale client gate without executing anything. `expiresAt` is omitted because current clients also reject cancellation of expired interrupts.
 
 ## Shared state
 
@@ -303,12 +388,17 @@ The separate [`dsh-ag-ui-adapter`](packages/dsh-ag-ui-adapter) package is the em
 ## HTTP and run semantics
 
 - Requests must be `POST application/json` and match AG-UI `RunAgentInput`.
-- A normal run accepts one new text user message.
+- A normal run accepts one or more new user messages with text or supported content parts; they join one DSH turn in arrival order. A run without new messages, including a full already-accepted transcript, only returns the history snapshot; it never waits behind an active run.
 - A continuation accepts one or more new frontend ToolMessages for one pending DSH turn.
+- An official A2UI user-action run accepts its validated `a2uiAction` envelope and matching synthetic `log_a2ui_event` pair; it may also carry the result of a client-owned pending `render_a2ui` call.
+- A render Tool flagged by the middleware in `forwardedProps.injectA2UITool` settles inside its run with `{"status":"rendered"}` and never parks.
+- Standard object metadata on an authenticated pending frontend Tool result is persisted through native DSH presentation metadata and returned by later message snapshots; results without metadata remain unchanged on the wire.
 - One DSH turn can cross multiple AG-UI HTTP runs.
 - Each run emits one `RUN_STARTED` and exactly one `RUN_FINISHED` or `RUN_ERROR`.
-- `runId` is an exact-request idempotency key. Completed identical requests replay retained events without driving DSH again.
-- One thread can have only one active HTTP run.
+- Native turns can outlive their HTTP response while frontend calls are parked. Their durable results, shared-state updates, and completion continue to update the thread projection. Invalid continuations leave pending calls available for a corrected request.
+- A failed user batch cancels its pending native inbox input. Discarded, unclaimed messages can be retried with their original message IDs; already claimed messages remain accepted, including after restart. A failed run ID still replays its recorded error, so retry input with a new run ID.
+- `runId` is an exact-request idempotency key. Completed identical requests, including history-only runs, replay retained events without driving DSH again. All runs share the bounded ledger; active records are never evicted, and a full ledger rejects admission with `429 RUN_LEDGER_FULL`.
+- One thread drives one HTTP run at a time. A run that arrives while another is active waits for it and for the Agent turn to settle, so the runs of one thread are served in arrival order; a waiting client that disconnects is never admitted. Waiting and reservation happen together, so several queued runs all get their turn. At most `maxRunsPerThread` requests may wait per thread; excess requests receive `429 RUN_QUEUE_FULL`, and disconnect frees a queue slot. A waiting request keeps the thread alive until admission or disconnect, including while a cancelled native turn settles. Identical requests that queued together replay the same retained result.
 - An active shared-state run emits its synchronization snapshot before model events.
 - One DSH step can park multiple frontend Tool calls; continuation runs may answer a subset.
 
@@ -344,6 +434,8 @@ Every backend Tool call carries its DSH render-intent card next to the standard 
 - The reserved `ag_ui_update_state` Tool and client-provided frontend Tools are excluded: the state Tool projects through `STATE_SNAPSHOT`, and the client already knows how to present its own Tools.
 - At each run start, the Gateway re-derives the settled cards of the whole transcript from the durable session log — the same evaluator and inputs as the live path — and emits them right after `MESSAGES_SNAPSHOT`, so a client that missed the live stream renders identical cards. A cold read only re-derives cards for Tools that still resolve in the thread's scope, so a crash-materialized frontend Tool call after a restart stays cardless. Cards count against the per-run event budget.
 
+The reserved `ag_ui_update_state` call and result remain protocol-only in live events and restored message history.
+
 The separate [`dsh-ag-ui-cards`](packages/dsh-ag-ui-cards) React package renders every card kind from these envelopes with no DSH runtime dependency, and documents the event-wiring recipe. Its component tests render events recorded from this Gateway, and the recording scenario stays guarded by this package's test suite.
 
 ## Lifecycle
@@ -356,11 +448,12 @@ An unexpected HTTP disconnect cancels the Gateway-owned DSH turn. `HttpAgent` do
 
 | Component | Supported version |
 | --- | --- |
-| AG-UI core/client/encoder | `>=0.0.58 <0.1.0` (`~0.0.58`; tested with `0.0.58`) |
+| AG-UI core/client/encoder | `>=0.0.59 <0.1.0` (`~0.0.59`; tested with `0.0.59`) |
+| `dsh-ag-ui/client` companion | `@ag-ui/client ~0.0.59` |
 | Node.js | `^22.19.0` or `>=24.0.0` |
-| DeepSeek Harness | `0.1.5-alpha.1` (exact developer-preview peers) |
+| DeepSeek Harness | `0.1.5-rc.2` (exact developer-preview peers) |
 
-DSH `0.1.5-alpha.1` uses session log v3. Live text arrives through `agent/assistant-stream`; settled history is read with `snapshotEvents()`. With the JSONL persistence plugin configured, DSH migrates older logs on resume (tested with a `0.1.1-rc.2` recording). Image and file Tool results are represented by `[image result]` and `[file result]` placeholders; attachment bytes are not transported.
+DSH `0.1.5-rc.2` uses session log v3. Live text arrives through `agent/assistant-stream`; settled history is read with `snapshotEvents()`. With the JSONL persistence plugin configured, DSH migrates older logs on resume (tested with a `0.1.1-rc.2` recording). Image and file Tool results are represented by `[image result]` and `[file result]` placeholders; attachment bytes are not transported.
 
 DSH is in developer preview and can introduce breaking changes. This package uses exact DSH peer versions until those APIs stabilize.
 
@@ -411,10 +504,10 @@ An unchanged Tool set preserves the Tool-schema prefix. Adding, removing, or cha
 ## Known limitations
 
 - Live thread bindings, run replay buffers, and shared state are process-local; session history can persist through the Host persistence plugin.
-- Host restart resumes stored sessions with `agents.resume()`. Parked browser Tools are not recovered: an interrupted turn reports `THREAD_INTERRUPTED`, and shared state needs a new client baseline.
-- Only text user input, assistant text, and string Tool results are adapted.
-- Partial SSE reconnect is not supported.
-- `STATE_DELTA`, AG-UI interrupt/HITL `resume[]`, multimodal messages, reasoning events, and activity events are not adapted yet.
+- Host restart resumes stored sessions with `agents.resume()`. Parked browser Tools and human request Promises are not recovered: an interrupted turn reports `THREAD_INTERRUPTED`, and shared state needs a new client baseline.
+- Partial SSE reconnect is not supported. Human questions reconnect through a fresh history-only run.
+- Human interaction supports root Agents only. If the embedding adapter enables `idleShutdownMs`, its independent child-process shutdown can interrupt a human wait; leave auto-shutdown disabled when live resumption is required.
+- `STATE_DELTA` and reasoning events are not adapted yet.
 - Shared-state updates use shallow top-level merge and do not provide versions, deep merge, or conflict resolution.
 
 ## Development
@@ -424,10 +517,10 @@ git clone https://github.com/CaiZongyuan/dsh-ag-ui.git
 cd dsh-ag-ui
 corepack enable
 pnpm install
-pnpm -r --workspace-root check
+pnpm -r --workspace-concurrency=1 --include-workspace-root check
 ```
 
-The repository is a pnpm workspace: the root package is the Gateway, and `packages/` holds the `dsh-ag-ui-cards` React card renderers and the `dsh-ag-ui-adapter` embedding adapter. `pnpm -r --workspace-root check` runs lint, strict TypeScript checking, per-file coverage, runtime/type builds, and publint in every workspace project. The Dojo fixture is intentionally source-checkout-only and is not included in the npm tarball.
+The repository is a pnpm workspace: the root package is the Gateway, and `packages/` holds the `dsh-ag-ui-cards` React card renderers and the `dsh-ag-ui-adapter` embedding adapter. `pnpm -r --workspace-concurrency=1 --include-workspace-root check` runs lint, strict TypeScript checking, per-file coverage, runtime/type builds, and publint in every workspace project. The Dojo fixture is intentionally source-checkout-only and is not included in the npm tarball.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution and release requirements.
 

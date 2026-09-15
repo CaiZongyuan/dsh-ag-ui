@@ -46,6 +46,8 @@ class DurableScriptedAdapter extends LlmAdapter {
       yield* text('The codeword is pine-cone-7.')
     } else if (prompt.startsWith('Repeat the codeword') && serialized.includes('pine-cone-7')) {
       yield* text('History kept the codeword pine-cone-7.')
+    } else if (prompt.startsWith('Ask the human')) {
+      yield* toolCall('fixture-question', 'ask_user_question', { questions: [{ id: 'confirm', question: 'Confirm?' }] })
     } else if (prompt.startsWith('Draft the note')) {
       yield* toolCall('fixture-draft-note', 'ui_draft_note', { subject: 'durable-note' })
     } else if (serialized.includes('signed-off')) {

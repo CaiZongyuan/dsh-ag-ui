@@ -8,18 +8,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Durable native projection of frontend Tool-result metadata through DSH presentation metadata.
+- Deterministic per-thread workspaces with DSH Web workspace registration when the Host provides it.
+- A `dsh-ag-ui/client` companion whose `DshHttpAgent` sends only messages relevant to the stateful Gateway's next admission while retaining full client history.
+- Native `@ag-ui/a2ui-middleware` render settlement and canonical validated user-action continuation across DSH turns.
+- Middleware-flagged A2UI render calls settle inside their run with `{"status":"rendered"}` instead of parking for a browser result the middleware never sends.
+- Per-tenant `selectableAgentPresets` grants let a run select a blank thread composition through native `agentPresets.select`; history stays read-only and started threads keep their recorded preset.
+- Native `present` declarations project as durable `dsh-deliverables` activities with authenticated, bounded Session-filesystem downloads.
+- Native root-Agent questions and one-shot approvals over AG-UI interrupt outcomes and `resume[]`, with bounded waits, readonly reconnect and atomic continuation admission.
 - Bidirectional shared state with `STATE_SNAPSHOT` and the reserved `ag_ui_update_state` Tool.
 - Dojo-compatible keyless examples for chat, backend Tools, shared state, HITL, and tool-based generative UI.
 
+### Fixed
+
+- `MESSAGES_SNAPSHOT` now reconstructs assistant Tool calls from durable DSH messages, so Tool-only assistant messages and their results remain correlated after replay.
+- `MESSAGES_SNAPSHOT` now includes the user messages the run just admitted and is emitted only after admission, so a client keeps the message it sent and a rejected run leaves its history untouched.
+
 ### Changed
 
-- Updated Gateway and adapter peers to DeepSeek Harness `0.1.5-alpha.1`; live text now consumes `agent/assistant-stream`, history uses session snapshots, and Agent setup uses the explicit callback argument.
+- Align Gateway and adapter Harness peers with `0.1.5-rc.2` for native deliverable declarations and bounded filesystem reads.
+- A run admits every new user message it carries into one DSH turn, in arrival order, and a run without new messages only synchronizes history; `INVALID_MESSAGE_BATCH` remains for batches mixing user messages with frontend Tool results.
+- Runs of one thread now queue in arrival order behind the active run instead of failing with `RUN_IN_PROGRESS`; a waiting client that disconnects is never admitted.
+- Raised the AG-UI dependency floor to `~0.0.59`, the first release that carries message `metadata`.
+- Live text now consumes `agent/assistant-stream`, history uses session snapshots, and Agent setup uses the explicit callback argument.
 - Resume now creates a session only for `SessionPersistenceNotFoundError`, preserving corruption and format-refusal errors.
 - Verified v3 session persistence and migration from the recorded `0.1.1-rc.2` log; file Tool results project as `[file result]`.
-
 - Browser Tool names now accept standard AG-UI-compatible ASCII identifiers while reserving the internal state Tool name.
 - Consolidated internal Tool-call and Run-event bookkeeping and removed redundant source fixtures without changing protocol behavior.
-- Upgraded the exact DeepSeek Harness compatibility target to `0.1.2-alpha.3` and replaced the removed composition package with supported explicit Agent-core rows.
+- Replaced the removed composition package with supported explicit Agent-core rows.
 
 ## [0.1.0] - 2026-08-22
 

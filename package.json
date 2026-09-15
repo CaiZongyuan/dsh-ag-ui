@@ -29,6 +29,10 @@
       "types": "./lib/types/browser-tools.d.ts",
       "default": "./lib/browser-tools.js"
     },
+    "./client": {
+      "types": "./lib/types/client.d.ts",
+      "default": "./lib/client.js"
+    },
     "./invariant": {
       "types": "./lib/types/invariant.d.ts",
       "default": "./lib/invariant.js"
@@ -41,6 +45,8 @@
     "lib/index.js.map",
     "lib/browser-tools.js",
     "lib/browser-tools.js.map",
+    "lib/client.js",
+    "lib/client.js.map",
     "lib/invariant.js",
     "lib/invariant.js.map",
     "lib/types/**/*.d.ts",
@@ -86,40 +92,77 @@
     "prepack": "pnpm build"
   },
   "dependencies": {
-    "@ag-ui/core": "~0.0.58",
-    "@ag-ui/encoder": "~0.0.58",
+    "@ag-ui/core": "~0.0.59",
+    "@ag-ui/encoder": "~0.0.59",
     "@deepseek-ai/schemastery": "3.18.2"
   },
   "peerDependencies": {
+    "@ag-ui/client": "~0.0.59",
     "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/dsh-agent": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-host-webserver": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-invariants": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-llm": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-session": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-session-persistence": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-tools": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-util-values": "0.1.5-alpha.1"
+    "@deepseek-ai/dsh-agent": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-home-paths": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-host-webserver": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-invariants": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-llm": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-session": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-session-persistence": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tools": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-util-values": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-attachment": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-client-file-upload": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-fs": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-present": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-agent-presets": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-user-approval": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-user-questions": "0.1.5-rc.2"
+  },
+  "peerDependenciesMeta": {
+    "@ag-ui/client": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-attachment": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-file-upload": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-fs": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tool-present": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent-presets": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-user-approval": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-user-questions": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "@ag-ui/client": "~0.0.58",
+    "@ag-ui/a2ui-middleware": "0.0.10",
+    "@ag-ui/client": "~0.0.59",
     "@deepseek-ai/cordis": "4.0.2",
     "@deepseek-ai/cordis-plugin-include": "1.0.7",
     "@deepseek-ai/cordis-plugin-loader": "1.0.3",
-    "@deepseek-ai/dsh-agent": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-agent-loop": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-agent-loop-testkit": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-agent-presets": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-host-webserver": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-invariants": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-llm": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-session": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-session-persistence": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-session-persistence-jsonl": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-session-projection": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-system-prompt": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-tools": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-util-values": "0.1.5-alpha.1",
+    "@deepseek-ai/dsh-agent": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-agent-loop": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-agent-loop-testkit": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-agent-presets": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-home-paths": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-host-webserver": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-invariants": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-llm": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-session": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-session-persistence": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-session-projection": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tools": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-util-values": "0.1.5-rc.2",
     "@types/node": "24.13.3",
     "@vitest/coverage-v8": "4.1.11",
     "oxlint": "1.79.0",
@@ -128,6 +171,17 @@
     "rxjs": "7.8.1",
     "tsdown": "0.22.14",
     "typescript": "6.0.3",
-    "vitest": "4.1.11"
+    "vitest": "4.1.11",
+    "@deepseek-ai/dsh-client-file-upload": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-attachment-local": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-client-connection": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-commands": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-attachment": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-fs": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-present": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-fs-local": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-ask-user": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-user-approval": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-user-questions": "0.1.5-rc.2"
   }
 }
