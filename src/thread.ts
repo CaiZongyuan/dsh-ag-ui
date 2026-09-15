@@ -1,7 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import {
   EventType,
-  type Message as AgUiMessage,
   type RunAgentInput,
   type Tool as AgUiTool,
   type ToolMessage as AgUiToolMessage,
@@ -21,11 +20,13 @@ import {
 import { isDeepStrictEqual } from 'node:util'
 import { AgUiGatewayError } from './errors.ts'
 import { jsonBytes, valueDigest } from './json.ts'
-import { durableUserId, SessionProjection, STATE_TOOL_NAME } from './projection.ts'
+import { consumedMessages, durableUserId, SessionProjection, STATE_TOOL_NAME } from './projection.ts'
 import { agentPresetsOf, sessionPresetOf } from './presets.ts'
 import { RunController, type RunRecord } from './run.ts'
 import type { ToolPresenter } from './tool-view.ts'
 import type { AgUiPrincipal, AgUiThreadIdentity } from './types.ts'
+
+export type RunAdmission = RunController | { replay: RunRecord }
 
 const FRONTEND_TOOL_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/
 
@@ -49,6 +50,9 @@ export interface ThreadOptions {
   readonly maxRunsPerThread: number
   readonly maxStateBytes: number
 }
+
+/** A new user message the V1 wire contract admits: text only. */
+type TextUserMessage = AgUiUserMessage & { content: string }
 
 interface AcceptedMessage {
   readonly role: 'user' | 'tool'
@@ -99,12 +103,14 @@ export class ThreadBinding {
   private disposed = false
   private interrupted = false
   private activeRun: RunController | undefined
+  private nativeTurn: number | undefined
+  private waitingRuns = 0
   private idleTimer: ReturnType<typeof setTimeout> | undefined
   private readonly acceptedMessages = new Map<string, AcceptedMessage>()
   private readonly frontendTools = new Map<string, FrontendToolRegistration>()
   private stagedTools: AgUiTool[] | undefined
   private readonly pendingCalls = new Map<string, PendingFrontendCall>()
-  private readonly runLedger = new Map<string, RunRecord>()
+  private readonly runLedger = new Map<string, RunController>()
   private readonly userMessageIds = new Map<string, string>()
   private sharedStateActive = false
   private stateToolDispose: (() => void) | undefined
@@ -158,11 +164,16 @@ export class ThreadBinding {
         /* v8 ignore next -- the Agent-scoped stream belongs to this exact Agent. */
         if (subject !== agent) return
         const active = this.activeRun
-        for (const event of this.projection.projectStream(frame, active?.turn).events) active?.emit(event)
+        const step = this.projection.projectStream(frame, this.nativeTurn)
+        if (active?.record.state !== 'active' || active.turn === undefined || active.turn !== this.nativeTurn) return
+        for (const event of step.events) active.emit(event)
       })
       agentCtx.on('agent/inbox/claimed', ({ agent: subject, message, turn }) => {
         const active = this.activeRun
-        if (subject === agent && active?.messageId === String(message.id)) active.turn = turn
+        if (subject === agent && active?.messageId === String(message.id)) {
+          active.turn = turn
+          this.nativeTurn = turn
+        }
       })
       agentCtx.on('agent/error', ({ agent: subject, error }) => {
         /* v8 ignore next -- scope-filtered Agent errors carry this exact Agent. */
@@ -209,24 +220,74 @@ export class ThreadBinding {
    * @param runId - client run identity.
    * @returns active or completed record, or undefined for a fresh id.
    */
-  getRun(runId: string): RunRecord | undefined {
-    return this.runLedger.get(runId)
+  getRun(runId: string, digest?: string): RunRecord | undefined {
+    const record = this.runLedger.get(runId)?.record
+    if (record !== undefined && digest !== undefined && record.digest !== digest) {
+      throw new AgUiGatewayError('RUN_ID_CONFLICT', 'The runId was reused with different input.', 409)
+    }
+    return record
   }
 
   /**
-   * Reserve one run before accepting DSH input.
+   * Admit one run. A history-only run is served at once, even beside an active run, because it
+   * only reads the session log. Any other run waits until this thread is free and reserves it in
+   * the same tick, so two queued runs never race for one reservation.
+   * @param signal - aborted once the waiting client is gone; that run is never admitted.
+   */
+  async admit(input: RunAgentInput, digest: string, signal: AbortSignal): Promise<RunAdmission> {
+    const disconnected = new AgUiGatewayError('CLIENT_DISCONNECTED', 'The AG-UI client left before its queued run started.', 409)
+    if (signal.aborted) throw disconnected
+    this.assertLive()
+    const prior = this.getRun(input.runId, digest)
+    if (prior !== undefined) return { replay: prior }
+    if (this.classifyMessages(input).kind === 'sync') return this.retainRun(input, digest)
+    if (this.waitingRuns >= this.options.maxRunsPerThread) {
+      throw new AgUiGatewayError('RUN_QUEUE_FULL', 'The AG-UI thread run queue is full.', 429)
+    }
+    this.waitingRuns++
+    this.clearIdleExpiry()
+    const runId = input.runId
+    const session = String(this.sessionId)
+    const left = Promise.withResolvers<never>()
+    const onAbort = (): void => {
+      this.ctx.logger.debug(`ag-ui: run ${runId} left the queue of session ${session}`)
+      left.reject(disconnected)
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    left.promise.catch(() => {})
+    try {
+      for (;;) {
+        // Settlement and disconnect can happen in the same tick; the race alone is insufficient.
+        if (signal.aborted) throw disconnected
+        if (this.activeRun !== undefined) {
+          this.ctx.logger.debug(`ag-ui: run ${runId} waits for the active run of session ${session}`)
+          await Promise.race([this.activeRun.done, left.promise])
+        } else if (this.pendingCalls.size === 0 && this.liveAgent.status !== 'idle') {
+          // a settled run may leave its finishing or cancelled turn converging; parked calls keep a turn open on purpose
+          this.ctx.logger.debug(`ag-ui: run ${runId} waits for the Agent of session ${session} to settle`)
+          await Promise.race([this.liveAgent.whenIdle(), left.promise])
+        } else {
+          const replay = this.getRun(input.runId, digest)
+          return replay === undefined ? this.reserveRun(input, digest) : { replay }
+        }
+      }
+    } finally {
+      signal.removeEventListener('abort', onAbort)
+      this.waitingRuns--
+      this.scheduleIdleExpiry()
+    }
+  }
+
+  /**
+   * Reserve one run before accepting DSH input; HTTP callers serialize through {@link admit}.
    * @param input - validated AG-UI request.
    * @param digest - exact request-body digest.
    * @returns the sole active controller for this thread.
    */
   reserveRun(input: RunAgentInput, digest: string): RunController {
     this.assertLive()
-    this.clearIdleExpiry()
-    const existing = this.runLedger.get(input.runId)
+    const existing = this.getRun(input.runId, digest)
     if (existing !== undefined) {
-      if (existing.digest !== digest) {
-        throw new AgUiGatewayError('RUN_ID_CONFLICT', 'The runId was reused with different input.', 409)
-      }
       throw new AgUiGatewayError(
         existing.state === 'active' ? 'RUN_IN_PROGRESS' : 'RUN_ALREADY_COMPLETED',
         existing.state === 'active' ? 'The AG-UI run is still active.' : 'The AG-UI run already completed.',
@@ -236,84 +297,54 @@ export class ThreadBinding {
     if (this.activeRun !== undefined) {
       throw new AgUiGatewayError('RUN_IN_PROGRESS', 'This AG-UI thread already has an active run.', 409)
     }
-    this.evictCompletedRuns()
-    if (this.runLedger.size >= this.options.maxRunsPerThread) {
-      throw new AgUiGatewayError('RUN_LEDGER_FULL', 'The AG-UI thread run ledger is full.', 429)
-    }
-    const record: RunRecord = { digest, events: [], state: 'active', bytes: 0 }
-    this.runLedger.set(input.runId, record)
-    const controller = new RunController(
-      input,
-      record,
-      this.options.maxRunEvents,
-      this.options.maxRunEventBytes,
-    )
+    const controller = this.retainRun(input, digest)
     this.activeRun = controller
-    void controller.done.then(() => {
-      /* v8 ignore next -- terminal settlement runs before another HTTP run can reserve this binding. */
-      if (this.activeRun === controller) this.activeRun = undefined
-      if (this.pendingCalls.size === 0) this.scheduleIdleExpiry()
-    })
     return controller
   }
 
   /**
-   * Start a reserved run after its SSE sink is attached.
-   * @param controller - exact controller returned by {@link reserveRun}.
+   * Start an admitted run after its SSE sink is attached.
+   * @param controller - exact controller returned by {@link admit} or {@link reserveRun}; history runs retain their identity without reserving the Agent.
    */
   drive(controller: RunController): void {
-    if (this.activeRun !== controller) throw new AgUiGatewayError('RUN_NOT_ACTIVE', 'The AG-UI run lost its reservation.', 409)
+    if (controller.record.state !== 'active' || this.runLedger.get(controller.input.runId) !== controller
+      || (this.activeRun !== controller && this.classifyMessages(controller.input).kind !== 'sync')) {
+      throw new AgUiGatewayError('RUN_NOT_ACTIVE', 'The AG-UI run lost its reservation.', 409)
+    }
     controller.start()
-    const history = this.liveAgent.session.snapshotEvents()
-    controller.emit({
-      type: EventType.MESSAGES_SNAPSHOT,
-      messages: this.projection.messagesSnapshot(history, id => this.userMessageIds.get(id)),
-    })
-    // the transcript's settled cards ride beside the snapshot, re-derived from the same durable log
-    for (const view of this.projection.toolViewEvents(history)) controller.emit(view)
-    // a snapshot that overflowed the run budget already settled the run
-    if (controller.record.state !== 'active') return
-    // a restarted thread reports its interrupted turn once so the client can drop parked calls
+    // a restarted thread reports its interrupted turn once, after its history, so the client can drop parked calls
     if (this.interrupted) {
       this.interrupted = false
+      this.emitHistory(controller, [])
       controller.error('THREAD_INTERRUPTED', 'The AG-UI thread was interrupted by a restart; its pending frontend Tool calls are closed.')
       return
     }
     try {
-      const admission = this.classifyMessages(controller.input.messages)
+      const admission = this.classifyMessages(controller.input)
+      if (admission.kind === 'sync') {
+        this.commitServerEchoes(admission.echoes)
+        this.emitHistory(controller, [])
+        controller.success()
+        return
+      }
       if (admission.kind === 'user') {
-        if (this.liveAgent.status !== 'idle' || this.pendingCalls.size !== 0) {
-          throw new AgUiGatewayError('AGENT_BUSY', 'The thread Agent is not ready for a new user run.', 409)
-        }
-        const baseline = this.prepareSharedState(controller.input)
-        this.assertStateToolAvailable(baseline)
-        this.applyFrontendTools(controller.input.tools)
-        this.injectContext(controller.input, baseline)
-        this.commitSharedStateBaseline(baseline)
-        // the client's message id is preserved as the durable id, so a cold resume recovers the mapping
-        const message = freezeMessage({
-          id: MessageId(durableUserId(admission.message.id)),
-          role: 'user',
-          content: [{ type: 'text', text: admission.message.content }],
-          source: { kind: 'user' },
-        })
-        this.acceptedMessages.set(admission.message.id, {
-          role: 'user',
-          digest: messageDigest(admission.message.id, admission.message.content),
-        })
-        controller.messageId = String(message.id)
-        this.userMessageIds.set(String(message.id), admission.message.id)
-        this.liveAgent.followup(message)
+        this.assertUserRunReady()
+        this.commitUserMessages(controller, admission.messages, admission.echoes)
         return
       }
 
       const turn = this.continuationTurn(admission.messages)
-      controller.turn = turn
+      this.emitHistory(controller, [])
+      /* v8 ignore next -- a continuation whose history snapshot overflowed the run budget is already settled; the user path covers the same guard. */
+      if (controller.record.state !== 'active') return
       const baseline = this.prepareSharedState(controller.input)
       this.assertStateToolAvailable(baseline)
+      this.prepareFrontendTools(controller.input.tools)
+      controller.turn = turn
       this.stagedTools = controller.input.tools
       this.injectContext(controller.input, baseline)
       this.commitSharedStateBaseline(baseline)
+      this.commitServerEchoes(admission.echoes)
       for (const message of admission.messages) {
         const pending = this.pendingCalls.get(message.toolCallId)
         /* v8 ignore next 3 -- continuationTurn synchronously verified the identical pending entries. */
@@ -328,22 +359,96 @@ export class ThreadBinding {
       // a partial resolution leaves calls parked; finish so the client can answer the rest
       if (this.pendingCalls.size !== 0) controller.success()
     } catch (error) {
-      const failure = error instanceof AgUiGatewayError ? error : new AgUiGatewayError('AGENT_EXECUTION_ERROR', 'The AG-UI run could not start.', 500, error)
-      controller.error(failure.code, failure.message)
-      if (this.liveAgent.status === 'running') {
-        this.liveAgent.cancel({ kind: 'hook', reason: `AG-UI run admission failed: ${failure.code}` })
-      }
+      this.failRunAdmission(controller, error)
+    }
+  }
+
+  private assertUserRunReady(): void {
+    if (this.liveAgent.status !== 'idle' || this.pendingCalls.size !== 0) {
+      throw new AgUiGatewayError('AGENT_BUSY', 'The thread Agent is not ready for a new user run.', 409)
     }
   }
 
   /**
-   * Cancel the exact active Gateway run after an unexpected transport close.
+   * Emit the durable transcript beside the user messages this run has just
+   * admitted; the DSH log records those only once the driver claims them.
+   * @param accepted - new client user messages, in arrival order.
+   */
+  private emitHistory(controller: RunController, accepted: readonly AgUiUserMessage[]): void {
+    const events = this.liveAgent.session.snapshotEvents()
+    controller.emit({
+      type: EventType.MESSAGES_SNAPSHOT,
+      messages: [
+        ...this.projection.messagesSnapshot(events, id => this.userMessageIds.get(id)),
+        ...accepted.map(message => ({ id: message.id, role: 'user' as const, content: message.content })),
+      ],
+    })
+    // the transcript's settled cards ride beside the snapshot, re-derived from the same durable log
+    for (const view of this.projection.toolViewEvents(events)) controller.emit(view)
+  }
+
+  /** Queue every admitted user message into one DSH turn, in arrival order. */
+  private commitUserMessages(controller: RunController, admitted: readonly TextUserMessage[], echoes: readonly AgUiToolMessage[]): void {
+    this.emitHistory(controller, admitted)
+    // a snapshot that overflowed the run budget already settled the run
+    if (controller.record.state !== 'active') return
+    const baseline = this.prepareSharedState(controller.input)
+    this.assertStateToolAvailable(baseline)
+    this.applyFrontendTools(controller.input.tools)
+    const durable = admitted.map(admission => freezeMessage({
+      id: MessageId(durableUserId(admission.id)),
+      role: 'user',
+      content: [{ type: 'text', text: admission.content }],
+      source: { kind: 'user' },
+    }))
+    try {
+      this.injectContext(controller.input, baseline)
+      this.commitSharedStateBaseline(baseline)
+      this.commitServerEchoes(echoes)
+      // A turn claims one next-turn message plus all pending next-step messages.
+      durable.forEach((message, index) => {
+        const admission = admitted[index]!
+        controller.messageId = String(message.id)
+        this.userMessageIds.set(String(message.id), admission.id)
+        if (index < durable.length - 1) this.liveAgent.send(message, 'next-step', false)
+        else this.liveAgent.followup(message)
+        if (controller.record.state !== 'active') throw new Error('Native admission settled the AG-UI run')
+        this.acceptedMessages.set(admission.id, { role: 'user', digest: messageDigest(admission.id, admission.content) })
+      })
+    } catch (error) {
+      // Native append may succeed before a notification throws. Cancel pending work,
+      // then retain only messages already claimed into the durable transcript.
+      this.liveAgent.cancel({ kind: 'hook', reason: 'AG-UI user admission failed' })
+      const claimed = new Set(consumedMessages(this.liveAgent.session.snapshotEvents()).map(message => String(message.id)))
+      for (const admission of admitted) {
+        if (claimed.has(durableUserId(admission.id))) {
+          this.acceptedMessages.set(admission.id, { role: 'user', digest: messageDigest(admission.id, admission.content) })
+        } else this.acceptedMessages.delete(admission.id)
+      }
+      throw error
+    }
+  }
+
+  private failRunAdmission(controller: RunController, error: unknown): void {
+    const failure = error instanceof AgUiGatewayError ? error : new AgUiGatewayError('AGENT_EXECUTION_ERROR', 'The AG-UI run could not start.', 500, error)
+    controller.error(failure.code, failure.message)
+    const terminal = controller.record.events.at(-1)!
+    if (terminal.code !== 'AG_UI_EVENT_BUFFER_OVERFLOW' && this.activeRun === controller
+      && controller.turn !== undefined && this.liveAgent.status === 'running') {
+      this.liveAgent.cancel({ kind: 'hook', reason: `AG-UI run admission failed: ${failure.code}` })
+    }
+  }
+
+  /**
+   * Settle the disconnected run and cancel only its owned Agent work.
    * @param controller - disconnected controller; stale controllers are ignored.
    */
   disconnect(controller: RunController): void {
-    if (this.activeRun !== controller || controller.record.state !== 'active') return
+    if (this.runLedger.get(controller.input.runId) !== controller || controller.record.state !== 'active') return
+    // An unopened response has no replayable run; retries must start with RUN_STARTED.
+    if (controller.record.events.length === 0) this.runLedger.delete(controller.input.runId)
     controller.error('CLIENT_DISCONNECTED', 'The AG-UI client disconnected before the run completed.')
-    if (this.liveAgent.status === 'running') {
+    if (this.activeRun === controller && this.liveAgent.status === 'running') {
       this.liveAgent.cancel({ kind: 'hook', reason: 'AG-UI client disconnected' })
     }
   }
@@ -353,7 +458,9 @@ export class ThreadBinding {
     if (this.disposed) return
     this.disposed = true
     this.clearIdleExpiry()
-    this.activeRun?.error('AGENT_NOT_AVAILABLE', 'The AG-UI thread was disposed.')
+    for (const controller of this.runLedger.values()) {
+      controller.error('AGENT_NOT_AVAILABLE', 'The AG-UI thread was disposed.')
+    }
     for (const pending of this.pendingCalls.values()) {
       pending.reject(new Error('AG-UI thread disposed'))
     }
@@ -370,20 +477,48 @@ export class ThreadBinding {
     if (handle !== undefined) await handle.dispose()
   }
 
+  /** Retain each HTTP run under the same bounds, independently of native turn ownership. */
+  private retainRun(input: RunAgentInput, digest: string): RunController {
+    this.evictCompletedRuns()
+    if (this.runLedger.size >= this.options.maxRunsPerThread) {
+      throw new AgUiGatewayError('RUN_LEDGER_FULL', 'The AG-UI thread run ledger is full.', 429)
+    }
+    const record: RunRecord = { digest, events: [], state: 'active', bytes: 0 }
+    const controller = new RunController(input, record, this.options.maxRunEvents, this.options.maxRunEventBytes, owner => {
+      if (this.activeRun === owner && owner.turn !== undefined && this.agent?.status === 'running') {
+        this.agent.cancel({ kind: 'hook', reason: 'AG-UI run event buffer overflow' })
+      }
+    })
+    this.runLedger.set(input.runId, controller)
+    this.clearIdleExpiry()
+    void controller.done.then(() => {
+      if (this.activeRun === controller) this.activeRun = undefined
+      this.scheduleIdleExpiry()
+    })
+    return controller
+  }
+
   private assertLive(): void {
     if (this.disposed || this.handle === undefined) {
       throw new AgUiGatewayError('AGENT_NOT_AVAILABLE', 'The AG-UI thread Agent is unavailable.', 410)
     }
   }
 
-  private classifyMessages(messages: AgUiMessage[]):
-    | { kind: 'user'; message: AgUiUserMessage & { content: string } }
-    | { kind: 'tools'; messages: AgUiToolMessage[] } {
-    const users: Array<AgUiUserMessage & { content: string }> = []
+  /** Sort a run's new messages: user messages open a turn, Tool results continue one, none at all only synchronizes history. */
+  private classifyMessages(input: RunAgentInput):
+    | { kind: 'sync'; echoes: AgUiToolMessage[] }
+    | { kind: 'user'; messages: TextUserMessage[]; echoes: AgUiToolMessage[] }
+    | { kind: 'tools'; messages: AgUiToolMessage[]; echoes: AgUiToolMessage[] } {
+    const users: TextUserMessage[] = []
     const tools: AgUiToolMessage[] = []
-    for (const message of messages) {
+    const echoes: AgUiToolMessage[] = []
+    const ids = new Set<string>()
+    const callIds = new Set<string>()
+    for (const message of input.messages) {
       if (message.role !== 'user' && message.role !== 'tool') continue
-      const digest = valueDigest(message)
+      if (ids.has(message.id)) throw new AgUiGatewayError('INVALID_MESSAGE_BATCH', 'Message ids must be unique within a run.')
+      ids.add(message.id)
+      const digest = message.role === 'user' ? messageDigest(message.id, message.content) : valueDigest(message)
       const accepted = this.acceptedMessages.get(message.id)
       if (accepted !== undefined) {
         if (accepted.role !== message.role || accepted.digest !== digest) {
@@ -392,9 +527,11 @@ export class ThreadBinding {
         continue
       }
       if (message.role === 'tool') {
+        if (callIds.has(message.toolCallId)) throw new AgUiGatewayError('INVALID_TOOL_RESULT_BATCH', 'A Tool call must be answered once.')
+        callIds.add(message.toolCallId)
         if (this.pendingCalls.has(message.toolCallId)) tools.push(message)
-        else if (this.projection.consumeServerResult(message.toolCallId)) {
-          this.acceptedMessages.set(message.id, { role: 'tool', digest })
+        else if (this.projection.hasServerResult(message.toolCallId)) {
+          echoes.push(message)
         } else {
           throw new AgUiGatewayError('UNKNOWN_TOOL_RESULT', 'The Tool result has no pending or completed server call.', 409)
         }
@@ -402,15 +539,22 @@ export class ThreadBinding {
         if (typeof message.content !== 'string') {
           throw new AgUiGatewayError('UNSUPPORTED_MESSAGE_CONTENT', 'V1 accepts text user messages only.')
         }
-        users.push(message as AgUiUserMessage & { content: string })
+        users.push(message as TextUserMessage)
       }
     }
-    if (users.length === 1 && tools.length === 0) return { kind: 'user', message: users[0] as AgUiUserMessage & { content: string } }
-    if (users.length === 0 && tools.length > 0) return { kind: 'tools', messages: tools }
-    throw new AgUiGatewayError(
-      'INVALID_MESSAGE_BATCH',
-      'A run must contain one new user message or one or more new frontend Tool results.',
-    )
+    if (users.length > 0 && tools.length > 0) {
+      throw new AgUiGatewayError('INVALID_MESSAGE_BATCH', 'A run cannot mix new user messages with new frontend Tool results.')
+    }
+    if (users.length > 0) return { kind: 'user', messages: users, echoes }
+    if (tools.length > 0) return { kind: 'tools', messages: tools, echoes }
+    return { kind: 'sync', echoes }
+  }
+
+  private commitServerEchoes(echoes: readonly AgUiToolMessage[]): void {
+    for (const echo of echoes) {
+      this.projection.consumeServerResult(echo.toolCallId)
+      this.acceptedMessages.set(echo.id, { role: 'tool', digest: valueDigest(echo) })
+    }
   }
 
   private continuationTurn(messages: AgUiToolMessage[]): number {
@@ -517,7 +661,7 @@ export class ThreadBinding {
     if (!this.sharedStateActive) throw new Error('Shared state is not active for this AG-UI thread')
     const callId = String(exec.callId)
     const lifecycle = this.projection.lifecycleOf(callId)
-    if (lifecycle?.kind !== 'state') throw new Error('Shared-state update has no DSH call position')
+    if (lifecycle?.kind !== 'state' || lifecycle.turn !== this.nativeTurn) throw new Error('Shared-state update has no DSH call position')
     if (lifecycle.commit !== undefined) throw new Error('Shared-state update is already pending')
     const updates = readStateUpdates(args)
     const current = this.projection.sharedState
@@ -528,10 +672,9 @@ export class ThreadBinding {
       throw new Error('Shared-state update exceeds the configured state byte limit')
     }
     const changed = !isDeepStrictEqual(next, current)
-    if (changed) {
-      const active = this.activeRun
-      /* v8 ignore next -- the state Tool executes only while its owning Run is active. */
-      if (active === undefined) throw new Error('Shared-state update has no active AG-UI run')
+    const active = this.activeRun
+    // A native turn may outlive its HTTP response; only a live response has a wire budget.
+    if (changed && active?.record.state === 'active' && active.turn === lifecycle.turn) {
       active.assertCanEmit({ type: EventType.STATE_SNAPSHOT, snapshot: next })
     }
     this.projection.stageCommit(callId, { value: structuredClone(next), changed })
@@ -606,14 +749,11 @@ export class ThreadBinding {
     args: unknown,
     exec: ToolRunContext,
   ): Promise<string> {
-    const violations = validateJsonSchemaValue(schema, args, '')
-    if (violations.length > 0) throw new Error(`Invalid frontend Tool arguments: ${violations.join('; ')}`)
+    assertFrontendToolArgs(schema, args)
     const callId = String(exec.callId)
     const lifecycle = this.projection.lifecycleOf(callId)
-    if (lifecycle?.kind !== 'backend' || lifecycle.name !== name) throw new Error('Frontend Tool call has no DSH call position')
+    if (lifecycle?.kind !== 'backend' || lifecycle.name !== name || lifecycle.turn !== this.nativeTurn) throw new Error('Frontend Tool call has no DSH call position')
     const active = this.activeRun
-    // the run may already have settled once every announced call streamed
-    if (active !== undefined && active.turn !== lifecycle.turn) throw new Error('Frontend Tool call has no active AG-UI run')
     this.projection.markParked(callId, lifecycle)
 
     const deferred = Promise.withResolvers<string>()
@@ -644,26 +784,37 @@ export class ThreadBinding {
     exec.signal.addEventListener('abort', onAbort, { once: true })
     this.pendingCalls.set(callId, pending)
     this.clearIdleExpiry()
-    if (active !== undefined
-      && this.projection.parkSettleReady(lifecycle.turn, lifecycle.step, this.startsWhileParked)) active.success()
+    if (active?.record.state === 'active' && active.turn === lifecycle.turn
+      && this.projection.parkSettleReady(lifecycle.turn, lifecycle.step, this.startsWhileParked)) {
+      this.emitFinalSnapshot(active)
+      active.success()
+    }
     return deferred.promise
   }
 
   private onSessionEvent(event: SessionEvent): void {
     const active = this.activeRun
-    const step = this.projection.project(event, active?.turn)
-    if (event.type === 'step/end' && this.stagedTools !== undefined && active?.turn === event.data.turn) {
+    const ownsTurn = active?.record.state === 'active' && active.turn !== undefined && active.turn === this.nativeTurn
+    const step = this.projection.project(event, this.nativeTurn)
+    if (event.type === 'step/end' && this.stagedTools !== undefined && this.nativeTurn === event.data.turn) {
       const staged = this.stagedTools
       this.stagedTools = undefined
       try {
         this.applyFrontendTools(staged)
       } catch (error) {
-        active.error('FRONTEND_TOOL_SYNC_FAILED', 'The frontend Tool set could not be updated.')
+        if (ownsTurn) active.error('FRONTEND_TOOL_SYNC_FAILED', 'The frontend Tool set could not be updated.')
         this.liveAgent.cancel({ kind: 'hook', reason: `AG-UI frontend Tool sync failed: ${errorChain(error)}` })
       }
     }
-    if (active === undefined || active.turn === undefined) return
     if (step.outcome !== undefined) {
+      this.nativeTurn = undefined
+      this.scheduleIdleExpiry()
+    }
+    if (!ownsTurn) return
+    if (step.outcome !== undefined) {
+      // This durable turn is over; a large final snapshot must not cancel a later turn.
+      active.turn = undefined
+      this.emitFinalSnapshot(active)
       if (step.outcome.kind === 'success') active.success()
       else active.error(step.outcome.code, step.outcome.message)
       return
@@ -673,13 +824,24 @@ export class ThreadBinding {
     // a frontend call settles at its own park instead
     if (event.type === 'tool/call'
       && this.projection.parkSettleReady(event.data.turn, event.data.step, this.startsWhileParked)) {
+      this.emitFinalSnapshot(active)
       active.success()
     }
   }
 
+  private emitFinalSnapshot(controller: RunController): void {
+    controller.emit({
+      type: EventType.MESSAGES_SNAPSHOT,
+      messages: this.projection.messagesSnapshot(this.liveAgent.session.snapshotEvents(), id => this.userMessageIds.get(id)),
+    })
+  }
+
   private onAgentError(error: unknown): void {
     const active = this.activeRun
-    if (active === undefined || active.record.state !== 'active') return
+    if (active?.record.state !== 'active') return
+    // A dispatched user message owns startup errors even before its first inbox claim.
+    if (active.turn === undefined ? active.messageId === undefined : active.turn !== this.nativeTurn) return
+    this.emitFinalSnapshot(active)
     active.error('AGENT_EXECUTION_ERROR', errorChain(error))
   }
 
@@ -706,10 +868,9 @@ export class ThreadBinding {
   }
 
   private evictCompletedRuns(): void {
-    while (this.runLedger.size >= this.options.maxRunsPerThread) {
-      const oldest = this.runLedger.entries().next().value
-      if (oldest === undefined || oldest[1].state === 'active') return
-      this.runLedger.delete(oldest[0])
+    for (const [runId, controller] of this.runLedger) {
+      if (this.runLedger.size < this.options.maxRunsPerThread) break
+      if (controller.record.state === 'completed') this.runLedger.delete(runId)
     }
   }
 
@@ -721,7 +882,8 @@ export class ThreadBinding {
 
   private scheduleIdleExpiry(): void {
     this.clearIdleExpiry()
-    if (this.disposed || this.pendingCalls.size !== 0 || this.activeRun !== undefined) return
+    if (this.disposed || this.nativeTurn !== undefined || this.pendingCalls.size !== 0 || this.activeRun !== undefined || this.waitingRuns !== 0
+      || [...this.runLedger.values()].some(controller => controller.record.state === 'active')) return
     this.idleTimer = setTimeout(() => { this.onExpired(this) }, this.options.threadIdleMs)
   }
 }
@@ -733,13 +895,18 @@ function isEmptyStateContainer(value: unknown): boolean {
 }
 
 /** Digest one accepted user message in a fixed field order, stable across cold resume. */
-function messageDigest(clientId: string, content: string): string {
+function messageDigest(clientId: string, content: AgUiUserMessage['content']): string {
   return valueDigest({ id: clientId, role: 'user', content })
 }
 
 /** Narrow a JSON object without accepting arrays or null. */
 function isUnknownRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function assertFrontendToolArgs(schema: ObjectJsonSchema, args: unknown): void {
+  const violations = validateJsonSchemaValue(schema, args, '')
+  if (violations.length > 0) throw new Error(`Invalid frontend Tool arguments: ${violations.join('; ')}`)
 }
 
 /** Read the state-management Tool input after model-boundary validation. */

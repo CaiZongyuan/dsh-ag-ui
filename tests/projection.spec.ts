@@ -667,6 +667,21 @@ describe('SessionProjection cold recovery', () => {
     expect(projection.consumeServerResult('call-1')).toBe(false)
   })
 
+  it('recovers a claimed identity before user/message append while leaving discarded input retryable', () => {
+    const kept = userMessage(durableUserId('claimed'), 'run once').data
+    const dropped = userMessage(durableUserId('discarded'), 'retry me').data
+    const events = [
+      event('agent/inbox/spliced', { target: 'next-step', start: 0, inserted: [kept, dropped] }),
+      event('agent/inbox/spliced', { target: 'next-step', start: 0, removedCount: 1, inserted: [] }),
+      event('agent/inbox/spliced', { target: 'next-step', start: 0, removedCount: 1, inserted: [], outcome: 'canceled' }),
+    ]
+    const recovery = new SessionProjection(sessionId, presenter).recoverFrom(events)
+    expect(recovery.users).toEqual([{ clientId: 'claimed', content: 'run once' }])
+    expect(new SessionProjection(sessionId, presenter).recoverFrom([
+      ...events, userMessage(durableUserId('claimed'), 'run once'),
+    ]).users).toEqual(recovery.users)
+  })
+
   it('marks the thread interrupted only when the last turn ended interrupted', () => {
     const turnEnd = (turn: number, kind: string): SessionEvent =>
       event('turn/end', { turn, reason: { kind } })

@@ -14,9 +14,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - `MESSAGES_SNAPSHOT` now reconstructs assistant Tool calls from durable DSH messages, so Tool-only assistant messages and their results remain correlated after replay.
+- `MESSAGES_SNAPSHOT` now includes the user messages the run just admitted and is emitted only after admission, so a client keeps the message it sent and a rejected run leaves its history untouched.
 
 ### Changed
 
+- A run admits every new user message it carries into one DSH turn, in arrival order, and a run without new messages only synchronizes history; `INVALID_MESSAGE_BATCH` remains for batches mixing user messages with frontend Tool results.
+- Runs of one thread now queue in arrival order behind the active run instead of failing with `RUN_IN_PROGRESS`; a waiting client that disconnects is never admitted.
 - Updated Gateway and adapter peers to DeepSeek Harness `0.1.5-alpha.1`; live text now consumes `agent/assistant-stream`, history uses session snapshots, and Agent setup uses the explicit callback argument.
 - Resume now creates a session only for `SessionPersistenceNotFoundError`, preserving corruption and format-refusal errors.
 - Verified v3 session persistence and migration from the recorded `0.1.1-rc.2` log; file Tool results project as `[file result]`.

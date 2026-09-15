@@ -128,11 +128,13 @@ lease.dispose()
 | `frontendToolTimeoutMs` | `300000` | Browser Tool result 最大等待时间 |
 | `maxRunEvents` | `4096` | 每个 run 最大保留 events |
 | `maxRunEventBytes` | `2097152` | 每个 run 最大保留 event bytes |
-| `maxRunsPerThread` | `32` | 每个 thread 最大 run ledger entries |
+| `maxRunsPerThread` | `32` | 每个 thread 保留的 run ledger entries 上限，同时也分别限制等待请求的数量 |
 
 `agentPreset` 让每个线程的 agent 从宿主的 agent-presets roster 组合而来（需在本 Gateway 之前挂载 roster 插件）；无法解析的 id 会让 Gateway 激活响亮失败，按租户条目覆盖该租户线程的部署默认值，而恢复的线程保持其持久 session 自己记录的组合。不配置 `agentPreset` 时，线程保持宿主组合不变。
 
 `maxRunEvents` 必须至少容纳 mandatory opening 与 terminal events。`maxRunEventBytes` 会限制包含 `RUN_STARTED` 和 terminal event 在内的完整 retained Run record，并且必须足以容纳已配置的最大 identity length。非 loopback DSH WebServer 需要设置 `allowNonLoopback: true`。推荐把 Gateway 保持在 loopback，并放在同 Host 的 authenticated BFF 后面。
+
+开始和结束时的持久化历史快照都会计入该上限。事件缓冲区溢出会结束 HTTP run，并且只取消该 run 当前已领取的原生 turn。只读历史请求溢出不会取消其他活跃 turn。已完成的重复请求仍精确重放所保留的 events。
 
 ## 架构
 
@@ -303,12 +305,15 @@ Upstream Dojo 的 integration registry 是静态源码，目前没有 `deepseek-
 ## HTTP 与 run 语义
 
 - Request 必须为 `POST application/json`，并且符合 AG-UI `RunAgentInput`。
-- 普通 run 接受一条新的 text user message。
+- 普通 run 接受一条或多条新的文本 user message，它们按到达顺序进入同一个 DSH turn。没有新消息的 run（包括重发完整已接纳 transcript）只返回历史 snapshot，不会在活跃 run 后面等待。
 - Continuation 接受属于一个 pending DSH turn 的一条或多条新 frontend ToolMessages。
 - 一个 DSH turn 可以跨多个 AG-UI HTTP runs。
 - 每个 run 发出一个 `RUN_STARTED` 和恰好一个 `RUN_FINISHED` 或 `RUN_ERROR`。
-- `runId` 是 exact-request idempotency key。已完成的相同 request 会重放 retained events，不再次驱动 DSH。
-- 一个 thread 同时只能有一个 active HTTP run。
+- frontend call 等待期间，native turn 可以在 HTTP response 结束后继续存在。持久化结果、共享状态更新和 turn 结束事件仍会更新 thread projection。无效的 continuation 不会消费 pending call，客户端可修正后重试。
+- user batch 失败时会取消 native inbox 中的待处理输入。已丢弃且尚未 claimed 的消息可以沿用原 message ID 重试；已 claimed 的消息保持 accepted，包括重启之后。失败的 run ID 仍重放原错误，因此重试输入须使用新的 run ID。
+- `runId` 是 exact-request idempotency key。已完成的相同 request（包括只读历史 run）会重放 retained events，不再次驱动 DSH。所有 run 共用有界 ledger；活跃记录不会被淘汰，ledger 已满时以 `429 RUN_LEDGER_FULL` 拒绝 admission。
+- 每个 thread 最多允许 `maxRunsPerThread` 个请求排队等待，超出时返回 `429 RUN_QUEUE_FULL`。等待客户端断开连接会释放队列位置。排队请求在被接纳或断开连接前阻止 thread 空闲过期，包括等待已取消的原生 turn 收敛期间。一起排队的相同请求会重放同一份保留结果，不会重复驱动 DSH。
+- 一个 thread 同时只驱动一个 HTTP run。在另一个 run 活跃时到达的 run 会等待它以及 Agent turn 结束，因此同一 thread 的 runs 按到达顺序执行；等待中断开连接的客户端不会被接纳。
 - Active shared-state run 会在 model events 前发送 synchronization snapshot。
 - 一个 DSH step 可挂起多个 frontend Tool call；续跑可只回答其中一部分。
 

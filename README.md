@@ -128,11 +128,13 @@ A later Profile patch replaces the bundle row's complete `config`; include every
 | `frontendToolTimeoutMs` | `300000` | Maximum browser Tool result wait |
 | `maxRunEvents` | `4096` | Maximum events retained per run |
 | `maxRunEventBytes` | `2097152` | Maximum retained event bytes per run |
-| `maxRunsPerThread` | `32` | Maximum retained run ledger entries per thread |
+| `maxRunsPerThread` | `32` | Maximum retained run ledger entries and, separately, waiting requests per thread |
 
 `agentPreset` composes each thread's agent from the host's agent-presets roster (mount the roster plugin before this Gateway); an unresolvable id fails Gateway activation loudly, a per-tenant entry overrides the deployment default for that tenant's threads, and a resumed thread keeps the composition its own durable session recorded. Without `agentPreset`, threads keep the host composition unchanged.
 
 `maxRunEvents` must retain at least the mandatory opening and terminal events. `maxRunEventBytes` bounds the complete retained Run record, including `RUN_STARTED` and its terminal event, and must be large enough for the configured maximum identity length. A non-loopback DSH WebServer requires `allowNonLoopback: true`. Prefer a loopback Gateway behind a same-host authenticated BFF.
+
+Opening and final durable history snapshots both count toward this bound. Buffer overflow ends the HTTP run and cancels only its currently claimed native turn. An overflowing history-only read does not cancel another active turn. Completed duplicate requests still replay the exact retained events.
 
 ## Architecture
 
@@ -303,12 +305,14 @@ The separate [`dsh-ag-ui-adapter`](packages/dsh-ag-ui-adapter) package is the em
 ## HTTP and run semantics
 
 - Requests must be `POST application/json` and match AG-UI `RunAgentInput`.
-- A normal run accepts one new text user message.
+- A normal run accepts one or more new text user messages; they join one DSH turn in arrival order. A run without new messages, including a full already-accepted transcript, only returns the history snapshot; it never waits behind an active run.
 - A continuation accepts one or more new frontend ToolMessages for one pending DSH turn.
 - One DSH turn can cross multiple AG-UI HTTP runs.
 - Each run emits one `RUN_STARTED` and exactly one `RUN_FINISHED` or `RUN_ERROR`.
-- `runId` is an exact-request idempotency key. Completed identical requests replay retained events without driving DSH again.
-- One thread can have only one active HTTP run.
+- Native turns can outlive their HTTP response while frontend calls are parked. Their durable results, shared-state updates, and completion continue to update the thread projection. Invalid continuations leave pending calls available for a corrected request.
+- A failed user batch cancels its pending native inbox input. Discarded, unclaimed messages can be retried with their original message IDs; already claimed messages remain accepted, including after restart. A failed run ID still replays its recorded error, so retry input with a new run ID.
+- `runId` is an exact-request idempotency key. Completed identical requests, including history-only runs, replay retained events without driving DSH again. All runs share the bounded ledger; active records are never evicted, and a full ledger rejects admission with `429 RUN_LEDGER_FULL`.
+- One thread drives one HTTP run at a time. A run that arrives while another is active waits for it and for the Agent turn to settle, so the runs of one thread are served in arrival order; a waiting client that disconnects is never admitted. Waiting and reservation happen together, so several queued runs all get their turn. At most `maxRunsPerThread` requests may wait per thread; excess requests receive `429 RUN_QUEUE_FULL`, and disconnect frees a queue slot. A waiting request keeps the thread alive until admission or disconnect, including while a cancelled native turn settles. Identical requests that queued together replay the same retained result.
 - An active shared-state run emits its synchronization snapshot before model events.
 - One DSH step can park multiple frontend Tool calls; continuation runs may answer a subset.
 

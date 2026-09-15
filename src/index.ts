@@ -16,7 +16,7 @@ import { jsonBytes, jsonDepth, requestDigest, utf8Bytes } from './json.ts'
 import { agentPresetsOf } from './presets.ts'
 import { replayRun } from './run.ts'
 import { durableSessionId } from './session-id.ts'
-import { ThreadBinding, type ThreadOptions } from './thread.ts'
+import { ThreadBinding, type RunAdmission, type ThreadOptions } from './thread.ts'
 import type { AgUiAgentLookup, AgUiPrincipal, AgUiThreadIdentity } from './types.ts'
 
 export type { AgUiAgentLookup, AgUiPrincipal, AgUiThreadIdentity } from './types.ts'
@@ -196,15 +196,20 @@ export class AgUiGateway extends Service implements AgUiAgentLookup {
       const input = parseInput(body)
       validateLimits(input, this.resolved)
       const binding = await this.bindingFor(principal, input.threadId)
-      const prior = binding.getRun(input.runId)
+      const prior = binding.getRun(input.runId, digest)
       if (prior !== undefined) {
-        if (prior.digest !== digest) {
-          throw new AgUiGatewayError('RUN_ID_CONFLICT', 'The runId was reused with different input.', 409)
-        }
         await replayRun(response, prior)
         return
       }
-      const controller = binding.reserveRun(input, digest)
+      const controller = await this.admitRun(binding, input, digest, response)
+      if ('replay' in controller) {
+        await replayRun(response, controller.replay)
+        return
+      }
+      if (response.destroyed) {
+        binding.disconnect(controller)
+        return
+      }
       /* v8 ignore next -- normal response close is covered; abnormal ownership is tested through Binding.disconnect. */
       const onClose = (): void => {
         /* v8 ignore next -- abnormal close is covered at the Binding boundary; normal end is already writableEnded. */
@@ -221,6 +226,24 @@ export class AgUiGateway extends Service implements AgUiAgentLookup {
       response.off('close', onClose)
     } catch (error) {
       this.respondError(response, publicError(error))
+    }
+  }
+
+  /** Queue behind the thread's active run, then reserve; a client that leaves the queue is not admitted. */
+  private async admitRun(
+    binding: ThreadBinding,
+    input: RunAgentInput,
+    digest: string,
+    response: ServerResponse,
+  ): Promise<RunAdmission> {
+    const gone = new AbortController()
+    const onClose = (): void => { gone.abort() }
+    response.once('close', onClose)
+    if (response.destroyed) gone.abort()
+    try {
+      return await binding.admit(input, digest, gone.signal)
+    } finally {
+      response.off('close', onClose)
     }
   }
 

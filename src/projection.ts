@@ -6,7 +6,7 @@ import {
   type Message as AgUiMessage,
 } from '@ag-ui/core'
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
-import type { ContentBlock, ToolResultBlock } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, ToolResultBlock, UserMessage } from '@deepseek-ai/dsh-llm'
 import { isAppendSurfaceEvent, type SessionId, type SessionEvent, type TurnEndReason } from '@deepseek-ai/dsh-session'
 import {
   parseToolArguments,
@@ -32,6 +32,25 @@ export function durableUserId(clientId: string): string {
 /** Whether one durable user-message id carries a derived client identity. */
 function clientUserId(durableId: string): string | undefined {
   return durableId.startsWith(USER_ID_PREFIX) ? durableId.slice(USER_ID_PREFIX.length) : undefined
+}
+
+/** Recover consumed user identities, including claims cancelled before the first model step. */
+export function consumedMessages(events: readonly SessionEvent[]): readonly UserMessage[] {
+  const inbox: Record<'next-turn' | 'next-step', UserMessage[]> = { 'next-turn': [], 'next-step': [] }
+  const users = new Map<string, UserMessage>()
+  for (const event of events) {
+    let messages: readonly UserMessage[] = []
+    if (event.type === 'user/message') messages = [event.data]
+    else if (event.type === 'agent/inbox/spliced') {
+      const { target, start, removedCount = 0, inserted, outcome } = event.data
+      const removed = inbox[target].splice(start, removedCount, ...inserted)
+      if (outcome !== 'canceled') messages = removed
+    }
+    for (const message of messages) {
+      users.set(String(message.id), message)
+    }
+  }
+  return [...users.values()]
 }
 
 /** Facts rebuilt from one durable log at cold resume. */
@@ -202,6 +221,7 @@ export class SessionProjection {
         this.toolCallLifecycles.delete(callId)
         const args = this.callArguments.get(callId)
         this.callArguments.delete(callId)
+        this.serverResultCallIds.add(callId)
         if (lifecycle?.kind === 'state') {
           const commit = lifecycle.commit
           if (commit !== undefined && !block.isError && commit.changed) {
@@ -210,7 +230,6 @@ export class SessionProjection {
           }
           return EMPTY_STEP
         }
-        this.serverResultCallIds.add(callId)
         if (lifecycle?.kind === 'frontend' || lifecycle?.kind === 'awaiting') return EMPTY_STEP
         const result = {
           type: EventType.TOOL_CALL_RESULT,
@@ -289,6 +308,11 @@ export class SessionProjection {
     if (lifecycle?.kind === 'state') this.toolCallLifecycles.set(callId, { ...lifecycle, commit })
   }
 
+  /** Test a recorded backend result without changing admission bookkeeping. */
+  hasServerResult(callId: string): boolean {
+    return this.serverResultCallIds.has(callId)
+  }
+
   /** Consume one recorded backend result id so a re-sent ToolMessage is accepted. */
   consumeServerResult(callId: string): boolean {
     return this.serverResultCallIds.delete(callId)
@@ -303,18 +327,18 @@ export class SessionProjection {
    */
   recoverFrom(events: readonly SessionEvent[]): ColdRecovery {
     let interrupted = false
-    const users: Array<{ clientId: string, content: string }> = []
     for (const event of events) {
-      if (event.type === 'user/message') {
-        if (event.data.source.kind !== 'user') continue
-        const clientId = clientUserId(String(event.data.id))
-        if (clientId !== undefined) users.push({ clientId, content: joinText(event.data.content) })
-      } else if (event.type === 'tool/result') {
+      if (event.type === 'tool/result') {
         this.serverResultCallIds.add(String(event.data.message.content[0].toolCallId))
       } else if (event.type === 'turn/end') {
         interrupted = event.data.reason.kind === 'interrupted'
       }
     }
+    const users = consumedMessages(events).flatMap(message => {
+      const clientId = clientUserId(String(message.id))
+      return message.source.kind === 'user' && clientId !== undefined
+        ? [{ clientId, content: joinText(message.content) }] : []
+    })
     return { interrupted, users }
   }
 

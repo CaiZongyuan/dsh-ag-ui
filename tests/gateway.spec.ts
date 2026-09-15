@@ -80,6 +80,7 @@ describe('AG-UI Gateway', () => {
       EventType.TEXT_MESSAGE_START,
       EventType.TEXT_MESSAGE_CONTENT,
       EventType.TEXT_MESSAGE_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     expect(agent.state).toEqual({
@@ -152,6 +153,7 @@ describe('AG-UI Gateway', () => {
       EventType.TOOL_CALL_START,
       EventType.TOOL_CALL_ARGS,
       EventType.TOOL_CALL_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     const dshAgent = harness.ctx.agents.list()[0]
@@ -183,6 +185,7 @@ describe('AG-UI Gateway', () => {
       EventType.TEXT_MESSAGE_START,
       EventType.TEXT_MESSAGE_CONTENT,
       EventType.TEXT_MESSAGE_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     expect(dshAgent?.status).toBe('idle')
@@ -220,6 +223,7 @@ describe('AG-UI Gateway', () => {
       EventType.TOOL_CALL_START,
       EventType.TOOL_CALL_ARGS,
       EventType.TOOL_CALL_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     const dshAgent = harness.ctx.agents.list()[0]
@@ -255,6 +259,7 @@ describe('AG-UI Gateway', () => {
       EventType.TEXT_MESSAGE_START,
       EventType.TEXT_MESSAGE_CONTENT,
       EventType.TEXT_MESSAGE_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     expect(dshAgent?.status).toBe('idle')
@@ -283,6 +288,7 @@ describe('AG-UI Gateway', () => {
       EventType.TOOL_CALL_START,
       EventType.TOOL_CALL_ARGS,
       EventType.TOOL_CALL_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
 
@@ -305,6 +311,7 @@ describe('AG-UI Gateway', () => {
       EventType.TEXT_MESSAGE_START,
       EventType.TEXT_MESSAGE_CONTENT,
       EventType.TEXT_MESSAGE_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     const dshAgent = harness.ctx.agents.list()[0]

@@ -31,6 +31,7 @@ export class RunController {
     readonly record: RunRecord,
     private readonly maxEvents: number,
     private readonly maxBytes: number,
+    private readonly onOverflow?: (controller: RunController) => void,
   ) {
     this.terminalReserveBytes = Math.max(
       eventBytes(this.successEvent()),
@@ -168,6 +169,7 @@ export class RunController {
     this.append(terminal, bytes)
     this.record.state = 'completed'
     this.settled.resolve()
+    if (terminal.type === EventType.RUN_ERROR && terminal.code === 'AG_UI_EVENT_BUFFER_OVERFLOW') this.onOverflow?.(this)
   }
 }
 

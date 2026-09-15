@@ -8,7 +8,13 @@
       },
       {
         "type": "MESSAGES_SNAPSHOT",
-        "messages": []
+        "messages": [
+          {
+            "id": "cards-user-1",
+            "role": "user",
+            "content": "Record every card kind."
+          }
+        ]
       },
       {
         "type": "TOOL_CALL_START",
@@ -542,6 +548,139 @@
         "messageId": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:1:2:assistant"
       },
       {
+        "type": "MESSAGES_SNAPSHOT",
+        "messages": [
+          {
+            "id": "cards-user-1",
+            "role": "user",
+            "content": "Record every card kind."
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:1:1:assistant",
+            "role": "assistant",
+            "toolCalls": [
+              {
+                "id": "cards-call-1",
+                "type": "function",
+                "function": {
+                  "name": "notes_check",
+                  "arguments": "{\"path\":\"notes.md\"}"
+                }
+              },
+              {
+                "id": "cards-call-2",
+                "type": "function",
+                "function": {
+                  "name": "suite_run",
+                  "arguments": "{\"suite\":\"unit\"}"
+                }
+              },
+              {
+                "id": "cards-call-3",
+                "type": "function",
+                "function": {
+                  "name": "greeting_write",
+                  "arguments": "{\"text\":\"hello dsh\"}"
+                }
+              },
+              {
+                "id": "cards-call-4",
+                "type": "function",
+                "function": {
+                  "name": "file_read",
+                  "arguments": "{\"path\":\"src/app.ts\"}"
+                }
+              },
+              {
+                "id": "cards-call-5",
+                "type": "function",
+                "function": {
+                  "name": "text_search",
+                  "arguments": "{\"query\":\"dsh:tool:view\"}"
+                }
+              },
+              {
+                "id": "cards-call-6",
+                "type": "function",
+                "function": {
+                  "name": "config_glob",
+                  "arguments": "{\"pattern\":\"*.config.ts\"}"
+                }
+              },
+              {
+                "id": "cards-call-7",
+                "type": "function",
+                "function": {
+                  "name": "web_search",
+                  "arguments": "{\"query\":\"AG-UI protocol\"}"
+                }
+              },
+              {
+                "id": "cards-call-8",
+                "type": "function",
+                "function": {
+                  "name": "web_fetch",
+                  "arguments": "{\"url\":\"https://ag-ui.com/\"}"
+                }
+              }
+            ]
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-1:result",
+            "content": "3 headings, 12 lines",
+            "role": "tool",
+            "toolCallId": "cards-call-1"
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-2:result",
+            "content": "ok — 148 tests passed",
+            "role": "tool",
+            "toolCallId": "cards-call-2"
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-3:result",
+            "content": "wrote 1 line",
+            "role": "tool",
+            "toolCallId": "cards-call-3"
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-4:result",
+            "content": "{\"path\":\"src/app.ts\",\"offset\":3,\"lines\":[{\"number\":3,\"text\":\"export function start() {\"},{\"number\":4,\"text\":\"  return runtime.boot()\"},{\"number\":5,\"text\":\"}\"}],\"totalLines\":41,\"lang\":\"ts\"}",
+            "role": "tool",
+            "toolCallId": "cards-call-4"
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-5:result",
+            "content": "9 matches in 1 file",
+            "role": "tool",
+            "toolCallId": "cards-call-5"
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-6:result",
+            "content": "2 paths",
+            "role": "tool",
+            "toolCallId": "cards-call-6"
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-7:result",
+            "content": "2 sources",
+            "role": "tool",
+            "toolCallId": "cards-call-7"
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-8:result",
+            "content": "fetched markdown",
+            "role": "tool",
+            "toolCallId": "cards-call-8"
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:1:2:assistant",
+            "role": "assistant",
+            "content": "Every card recorded."
+          }
+        ]
+      },
+      {
         "type": "RUN_FINISHED",
         "threadId": "cards-fixtures",
         "runId": "cards-run-1",
@@ -686,6 +825,11 @@
             "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:1:2:assistant",
             "role": "assistant",
             "content": "Every card recorded."
+          },
+          {
+            "id": "cards-user-2",
+            "role": "user",
+            "content": "Replay cold."
           }
         ]
       },
@@ -887,6 +1031,149 @@
       {
         "type": "TEXT_MESSAGE_END",
         "messageId": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:2:1:assistant"
+      },
+      {
+        "type": "MESSAGES_SNAPSHOT",
+        "messages": [
+          {
+            "id": "cards-user-1",
+            "role": "user",
+            "content": "Record every card kind."
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:1:1:assistant",
+            "role": "assistant",
+            "toolCalls": [
+              {
+                "id": "cards-call-1",
+                "type": "function",
+                "function": {
+                  "name": "notes_check",
+                  "arguments": "{\"path\":\"notes.md\"}"
+                }
+              },
+              {
+                "id": "cards-call-2",
+                "type": "function",
+                "function": {
+                  "name": "suite_run",
+                  "arguments": "{\"suite\":\"unit\"}"
+                }
+              },
+              {
+                "id": "cards-call-3",
+                "type": "function",
+                "function": {
+                  "name": "greeting_write",
+                  "arguments": "{\"text\":\"hello dsh\"}"
+                }
+              },
+              {
+                "id": "cards-call-4",
+                "type": "function",
+                "function": {
+                  "name": "file_read",
+                  "arguments": "{\"path\":\"src/app.ts\"}"
+                }
+              },
+              {
+                "id": "cards-call-5",
+                "type": "function",
+                "function": {
+                  "name": "text_search",
+                  "arguments": "{\"query\":\"dsh:tool:view\"}"
+                }
+              },
+              {
+                "id": "cards-call-6",
+                "type": "function",
+                "function": {
+                  "name": "config_glob",
+                  "arguments": "{\"pattern\":\"*.config.ts\"}"
+                }
+              },
+              {
+                "id": "cards-call-7",
+                "type": "function",
+                "function": {
+                  "name": "web_search",
+                  "arguments": "{\"query\":\"AG-UI protocol\"}"
+                }
+              },
+              {
+                "id": "cards-call-8",
+                "type": "function",
+                "function": {
+                  "name": "web_fetch",
+                  "arguments": "{\"url\":\"https://ag-ui.com/\"}"
+                }
+              }
+            ]
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-1:result",
+            "content": "3 headings, 12 lines",
+            "role": "tool",
+            "toolCallId": "cards-call-1"
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-2:result",
+            "content": "ok — 148 tests passed",
+            "role": "tool",
+            "toolCallId": "cards-call-2"
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-3:result",
+            "content": "wrote 1 line",
+            "role": "tool",
+            "toolCallId": "cards-call-3"
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-4:result",
+            "content": "{\"path\":\"src/app.ts\",\"offset\":3,\"lines\":[{\"number\":3,\"text\":\"export function start() {\"},{\"number\":4,\"text\":\"  return runtime.boot()\"},{\"number\":5,\"text\":\"}\"}],\"totalLines\":41,\"lang\":\"ts\"}",
+            "role": "tool",
+            "toolCallId": "cards-call-4"
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-5:result",
+            "content": "9 matches in 1 file",
+            "role": "tool",
+            "toolCallId": "cards-call-5"
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-6:result",
+            "content": "2 paths",
+            "role": "tool",
+            "toolCallId": "cards-call-6"
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-7:result",
+            "content": "2 sources",
+            "role": "tool",
+            "toolCallId": "cards-call-7"
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-8:result",
+            "content": "fetched markdown",
+            "role": "tool",
+            "toolCallId": "cards-call-8"
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:1:2:assistant",
+            "role": "assistant",
+            "content": "Every card recorded."
+          },
+          {
+            "id": "cards-user-2",
+            "role": "user",
+            "content": "Replay cold."
+          },
+          {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:2:1:assistant",
+            "role": "assistant",
+            "content": "Cold replay recorded."
+          }
+        ]
       },
       {
         "type": "RUN_FINISHED",

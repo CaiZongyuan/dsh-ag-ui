@@ -126,9 +126,9 @@ describe('DshAgent', () => {
     await vi.waitFor(() => {
       expect(() => agent.url).toThrow('has not started')
     })
-    // the replacement child starts empty: process-local session memory is gone
+    // The replacement child is empty, but the client resends its complete transcript.
     await ask(agent, 'What is my name?')
-    expect(assistantText(agent)).toBe('You have not told me your name.')
+    expect(assistantText(agent)).toBe('Your name is Ada.')
     await agent.stop()
   })
 
