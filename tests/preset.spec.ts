@@ -181,6 +181,7 @@ describe('threads refuse a configured preset without a roster', () => {
         maxRunEventBytes: 128 * 1024,
         maxRunsPerThread: 4,
         maxStateBytes: 64 * 1024,
+        maxFilesPerMessage: 8,
       },
       () => {},
     )
@@ -220,6 +221,7 @@ describe('resumed threads keep their recorded composition', () => {
     maxRunEventBytes: 128 * 1024,
     maxRunsPerThread: 4,
     maxStateBytes: 64 * 1024,
+    maxFilesPerMessage: 8,
   })
 
   it('mounts the log-recorded preset even after the tenant override changed', async () => {

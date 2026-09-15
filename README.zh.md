@@ -17,6 +17,7 @@
 - 可使用 `dsh plugin add` 安装的 DSH Profile Bundle
 - 下限式 AG-UI 协议范围（`~0.0.59`）
 - 使用可信 tenant/user headers 的 BFF-to-Gateway 认证
+- 按 thread 流式上传文件并通过认证 route 下载
 - `(tenantId, userId, threadId)` 到 DSH Agent 的进程内绑定
 - AG-UI 文本流与 backend Tool result 投影
 - 由 `RunAgentInput.tools` 提供的 Agent-scoped browser Tools
@@ -103,7 +104,7 @@ lease.dispose()
 
 | 字段 | 默认值 | 用途 |
 | --- | --- | --- |
-| `path` | `/ag-ui` | 精确 Host HTTP route |
+| `path` | `/ag-ui` | Run 与 file 使用的 Host HTTP route base |
 | `provider` | 必填 | 已注册 DSH model provider route |
 | `model` | 必填 | Provider 持有的 model ID |
 | `workspaceRoot` | `<DSH_HOME>/workspaces` | 按 durable session id 命名的 thread workspace 目录根路径 |
@@ -114,9 +115,11 @@ lease.dispose()
 | `userHeader` | `x-dsh-user-id` | 可信 user identity header |
 | `allowNonLoopback` | `false` | 显式允许非 loopback Host bind |
 | `maxRequestBytes` | `262144` | 最大 request body bytes |
+| `maxFileBytes` | `104857600` | 每个上传文件的最大 bytes |
 | `maxIdentityBytes` | `256` | 每个 protocol 或 identity ID 的最大 bytes |
 | `maxMessages` | `256` | 每次 request 的最大 message 数量 |
 | `maxMessageBytes` | `524288` | Message JSON 最大总 bytes |
+| `maxFilesPerMessage` | `8` | 每条 user message 的最大非文本 part 数量 |
 | `maxContexts` | `32` | 最大 context entry 数量 |
 | `maxContextBytes` | `131072` | Context JSON 最大总 bytes |
 | `maxTools` | `32` | 最大 browser Tool 数量 |
@@ -134,6 +137,12 @@ lease.dispose()
 `agentPreset` 让每个线程的 agent 从宿主的 agent-presets roster 组合而来（需在本 Gateway 之前挂载 roster 插件）；无法解析的 id 会让 Gateway 激活响亮失败，按租户条目覆盖该租户线程的部署默认值，而恢复的线程保持其持久 session 自己记录的组合。不配置 `agentPreset` 时，线程保持宿主组合不变。
 
 每个 thread 使用 `<workspaceRoot>/<sessionId>` 作为 DSH working directory。目录按 durable session id 命名，客户端 thread id 不会落盘。Host 提供 `workspaceRegistry` 时，Gateway 会为 DSH Web 注册新 workspace。
+
+文件路由要求官方 `fileUploads` 和 `attachments` services，`@deepseek-ai/dsh-web-app` 已挂载这两个服务。`POST <path>/threads/<threadId>/files` 流式接收 raw body、`content-length`、可选的 `content-type` 和 percent-encoded `x-file-name`。Harness 负责流式存储、内容哈希、临时文件清理和 staged receipts。响应保留 AG-UI URL source 及 filename/size/sha256 metadata。
+
+客户端更换代理前缀时必须保留返回 URL 的 query。Gateway 为认证 session 的原生文件引用和 receipt 签名。`GET` 校验签名及 principal/thread 映射后调用官方流式 reader。同名上传保留显示名称，但获得不同的 receipt URL。冷恢复后仍可授权下载；轮换 shared secret 会使旧 URL 失效。原生上传接入前的无签名 URL 需要重新上传。
+
+User message 接受有序的 text 和带签名的 thread-file URL parts。图片走官方 image admission，其他文件成为原生 file content parts。Harness 负责 receipt 绑定、成功 admission 后的回收，以及队列投递失败时的回滚。被拒绝的 admission 可以使用仍处于 staged 状态的 receipt 重试。已消费、显式回收或冷启动后尚未发送的 receipt 返回 `FILE_NOT_STAGED`，需要重新上传；Gateway 不会恢复过期授权。`MESSAGES_SNAPSHOT` 保留实际接受的完整 AG-UI parts。异步文件处理后会重新校验 shared-state 和 frontend Tool admission，再发布这些 parts。不接受 inline data parts。
 
 `maxRunEvents` 必须至少容纳 mandatory opening 与 terminal events。`maxRunEventBytes` 会限制包含 `RUN_STARTED` 和 terminal event 在内的完整 retained Run record，并且必须足以容纳已配置的最大 identity length。非 loopback DSH WebServer 需要设置 `allowNonLoopback: true`。推荐把 Gateway 保持在 loopback，并放在同 Host 的 authenticated BFF 后面。
 
@@ -317,7 +326,7 @@ Upstream Dojo 的 integration registry 是静态源码，目前没有 `deepseek-
 ## HTTP 与 run 语义
 
 - Request 必须为 `POST application/json`，并且符合 AG-UI `RunAgentInput`。
-- 普通 run 接受一条或多条新的文本 user message，它们按到达顺序进入同一个 DSH turn。没有新消息的 run（包括重发完整已接纳 transcript）只返回历史 snapshot，不会在活跃 run 后面等待。
+- 普通 run 接受一条或多条包含文本或受支持 content parts 的新 user message，它们按到达顺序进入同一个 DSH turn。没有新消息的 run（包括重发完整已接纳 transcript）只返回历史 snapshot，不会在活跃 run 后面等待。
 - Continuation 接受属于一个 pending DSH turn 的一条或多条新 frontend ToolMessages。
 - 官方 A2UI user-action run 接受经过校验的 `a2uiAction` envelope 与匹配的 synthetic `log_a2ui_event` pair；它也可以同时携带客户端自有 pending `render_a2ui` 调用的 result。
 - middleware 在 `forwardedProps.injectA2UITool` 中标记的 render Tool 会在其 run 内以 `{"status":"rendered"}` 结算，从不 park。
@@ -435,9 +444,9 @@ Tool set 不变时保留 Tool-schema prefix。添加、删除或修改 Tool 可�
 
 - 活跃 thread 绑定、run 重放缓冲和 shared state 保存在进程内；会话历史可通过 Host 持久化插件保留。
 - Host 重启后通过 `agents.resume()` 恢复已保存的会话。不会恢复挂起的 browser Tool：被中断的回合返回 `THREAD_INTERRUPTED`，shared state 需要新的 client baseline。
-- 只适配 text user input、assistant text 和 string Tool results。
+- User input 支持文本和已上传文件；assistant messages 和 Tool results 投影为文本。
 - 不支持 partial SSE reconnect。
-- 尚未适配 `STATE_DELTA`、AG-UI interrupt/HITL `resume[]`、multimodal messages、reasoning events 和 activity events。
+- 尚未适配 `STATE_DELTA`、AG-UI interrupt/HITL `resume[]`、reasoning events 和 activity events。
 - Shared-state update 使用 top-level shallow merge，不提供 version、deep merge 或 conflict resolution。
 
 ## 开发

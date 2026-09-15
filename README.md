@@ -17,6 +17,7 @@ A community [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 
 - Installable DSH Profile Bundle through `dsh plugin add`
 - Floored AG-UI protocol range (`~0.0.59`)
 - Authenticated BFF-to-Gateway requests with trusted tenant and user headers
+- Streamed per-thread file upload and authenticated download routes
 - Process-local `(tenantId, userId, threadId)` bindings to DSH Agents
 - AG-UI text streaming and backend Tool result projection
 - Agent-scoped browser Tools supplied by `RunAgentInput.tools`
@@ -103,7 +104,7 @@ A later Profile patch replaces the bundle row's complete `config`; include every
 
 | Field | Default | Purpose |
 | --- | --- | --- |
-| `path` | `/ag-ui` | Exact Host HTTP route |
+| `path` | `/ag-ui` | Base Host HTTP route for runs and files |
 | `provider` | required | Registered DSH model provider route |
 | `model` | required | Model ID owned by the provider |
 | `workspaceRoot` | `<DSH_HOME>/workspaces` | Root for per-thread workspace directories, named by durable session id |
@@ -114,9 +115,11 @@ A later Profile patch replaces the bundle row's complete `config`; include every
 | `userHeader` | `x-dsh-user-id` | Trusted user identity header |
 | `allowNonLoopback` | `false` | Permit a non-loopback Host bind explicitly |
 | `maxRequestBytes` | `262144` | Maximum request body bytes |
+| `maxFileBytes` | `104857600` | Maximum bytes per uploaded file |
 | `maxIdentityBytes` | `256` | Maximum bytes per protocol or identity ID |
 | `maxMessages` | `256` | Maximum message count per request |
 | `maxMessageBytes` | `524288` | Maximum combined message JSON bytes |
+| `maxFilesPerMessage` | `8` | Maximum non-text parts in one user message |
 | `maxContexts` | `32` | Maximum context entry count |
 | `maxContextBytes` | `131072` | Maximum combined context JSON bytes |
 | `maxTools` | `32` | Maximum browser Tool count |
@@ -134,6 +137,12 @@ A later Profile patch replaces the bundle row's complete `config`; include every
 `agentPreset` composes each thread's agent from the host's agent-presets roster (mount the roster plugin before this Gateway); an unresolvable id fails Gateway activation loudly, a per-tenant entry overrides the deployment default for that tenant's threads, and a resumed thread keeps the composition its own durable session recorded. Without `agentPreset`, threads keep the host composition unchanged.
 
 Each thread uses `<workspaceRoot>/<sessionId>` as its DSH working directory. The directory is named by the durable session id, so client thread ids stay off disk. When the Host provides `workspaceRegistry`, the Gateway registers new workspaces for DSH Web.
+
+File routes require the official `fileUploads` and `attachments` services, already mounted by `@deepseek-ai/dsh-web-app`. `POST <path>/threads/<threadId>/files` streams the raw body with `content-length`, optional `content-type`, and percent-encoded `x-file-name`. Harness owns streamed storage, content hashes, temporary-file cleanup, and staged receipts. The response retains its AG-UI URL source and filename/size/sha256 metadata.
+
+Clients must preserve the returned URL query when changing a proxy prefix. The gateway signs the native file reference and receipt for the authenticated session. `GET` verifies the signature and principal/thread mapping before calling the official streamed reader. Same-name uploads keep their display name and receive distinct receipt URLs. Downloads remain authorized after cold resume; rotating the shared secret invalidates old URLs. Pre-native unsigned upload URLs require a fresh upload.
+
+User messages accept ordered text and signed thread-file URL parts. Images use official image admission; other files become native file content parts. Harness owns receipt binding, successful admission retirement, and rollback when queue delivery fails. Rejected admission can retry its still-staged receipt. A consumed, explicitly retired, or cold unsent receipt returns `FILE_NOT_STAGED` and requires re-upload; the gateway never restores expired authority. `MESSAGES_SNAPSHOT` preserves the exact accepted AG-UI parts. Shared-state and frontend Tool admission are revalidated after asynchronous file processing, before publishing those parts. Inline data parts are not accepted.
 
 `maxRunEvents` must retain at least the mandatory opening and terminal events. `maxRunEventBytes` bounds the complete retained Run record, including `RUN_STARTED` and its terminal event, and must be large enough for the configured maximum identity length. A non-loopback DSH WebServer requires `allowNonLoopback: true`. Prefer a loopback Gateway behind a same-host authenticated BFF.
 
@@ -317,7 +326,7 @@ The separate [`dsh-ag-ui-adapter`](packages/dsh-ag-ui-adapter) package is the em
 ## HTTP and run semantics
 
 - Requests must be `POST application/json` and match AG-UI `RunAgentInput`.
-- A normal run accepts one or more new text user messages; they join one DSH turn in arrival order. A run without new messages, including a full already-accepted transcript, only returns the history snapshot; it never waits behind an active run.
+- A normal run accepts one or more new user messages with text or supported content parts; they join one DSH turn in arrival order. A run without new messages, including a full already-accepted transcript, only returns the history snapshot; it never waits behind an active run.
 - A continuation accepts one or more new frontend ToolMessages for one pending DSH turn.
 - An official A2UI user-action run accepts its validated `a2uiAction` envelope and matching synthetic `log_a2ui_event` pair; it may also carry the result of a client-owned pending `render_a2ui` call.
 - A render Tool flagged by the middleware in `forwardedProps.injectA2UITool` settles inside its run with `{"status":"rendered"}` and never parks.
@@ -434,9 +443,9 @@ An unchanged Tool set preserves the Tool-schema prefix. Adding, removing, or cha
 
 - Live thread bindings, run replay buffers, and shared state are process-local; session history can persist through the Host persistence plugin.
 - Host restart resumes stored sessions with `agents.resume()`. Parked browser Tools are not recovered: an interrupted turn reports `THREAD_INTERRUPTED`, and shared state needs a new client baseline.
-- Only text user input, assistant text, and string Tool results are adapted.
+- User input supports text and uploaded files; assistant messages and Tool results are projected as text.
 - Partial SSE reconnect is not supported.
-- `STATE_DELTA`, AG-UI interrupt/HITL `resume[]`, multimodal messages, reasoning events, and activity events are not adapted yet.
+- `STATE_DELTA`, AG-UI interrupt/HITL `resume[]`, reasoning events, and activity events are not adapted yet.
 - Shared-state updates use shallow top-level merge and do not provide versions, deep merge, or conflict resolution.
 
 ## Development

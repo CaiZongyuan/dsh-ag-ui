@@ -33,6 +33,7 @@ const OPTIONS = {
   maxRunEventBytes: 128 * 1024,
   maxRunsPerThread: 4,
   maxStateBytes: 64 * 1024,
+  maxFilesPerMessage: 8,
 } satisfies Omit<ThreadOptions, 'workspaceRoot'>
 
 const roots: string[] = []

@@ -2,6 +2,7 @@ import {
   EventType,
   type AssistantMessage as AgUiAssistantMessage,
   type BaseEvent,
+  type InputContent,
   type CustomEvent,
   type Message as AgUiMessage,
 } from '@ag-ui/core'
@@ -57,8 +58,8 @@ export function consumedMessages(events: readonly SessionEvent[]): readonly User
 interface ColdRecovery {
   /** The log's last turn ended interrupted by crash recovery. */
   readonly interrupted: boolean
-  /** Recovered user messages, as (client id, text content) pairs in log order. */
-  readonly users: ReadonlyArray<{ readonly clientId: string; readonly content: string }>
+  /** Recovered user messages, as (client id, original content) pairs in log order. */
+  readonly users: ReadonlyArray<{ readonly clientId: string; readonly content: string | InputContent[] }>
 }
 
 /** Where a tool call sits inside its DSH session. */
@@ -338,7 +339,7 @@ export class SessionProjection {
     const users = consumedMessages(events).flatMap(message => {
       const clientId = clientUserId(String(message.id))
       return message.source.kind === 'user' && clientId !== undefined
-        ? [{ clientId, content: joinText(message.content) }] : []
+        ? [{ clientId, content: userContent(message) }] : []
     })
     return { interrupted, users }
   }
@@ -381,7 +382,7 @@ export class SessionProjection {
         if (event.data.source.kind !== 'user') continue
         const id = userMessageId(String(event.data.id))
         if (id === undefined) continue
-        messages.push({ id, role: 'user', content: joinText(event.data.content) })
+        messages.push({ id, role: 'user', content: userContent(event.data) })
       } else if (event.type === 'assistant/message') {
         const text = joinText(event.data.message.content)
         const toolCalls = assistantToolCalls(event.data.message.content)
@@ -528,4 +529,10 @@ function renderToolResult(block: ToolResultBlock): string {
     else text.push(renderToolResult(content))
   }
   return text.join('\n')
+}
+
+/** Preserve admitted wire content through the durable native user message. */
+function userContent(message: { readonly content: readonly ContentBlock[], readonly source: unknown }): string | InputContent[] {
+  const parts = (message.source as { agUiContent?: unknown }).agUiContent
+  return Array.isArray(parts) ? parts as InputContent[] : joinText(message.content)
 }
