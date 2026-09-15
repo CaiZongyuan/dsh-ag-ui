@@ -782,6 +782,85 @@ describe('ThreadBinding frontend Tools', () => {
     expect(result.record.events.at(-1)?.type).toBe(EventType.RUN_FINISHED)
   })
 
+  it.each(['context-append', 'before-append', 'after-append', 'after-claim', 'turn-start'] as const)('contains failed action admission %s without retrying consumed work', async failure => {
+    const { binding, adapter } = await mount([textResponse('action handled')])
+    const agent = binding.liveAgent
+    const followup = agent.followup.bind(agent)
+    const broken = vi.spyOn(agent, failure === 'context-append' ? 'inject' : 'followup').mockImplementationOnce(message => {
+      if (failure === 'turn-start') {
+        const stop = agent.ctx.on('agent/status', ({ status }) => {
+          if (status !== 'running') return
+          stop()
+          vi.spyOn(agent.session, 'append').mockImplementationOnce(() => { throw new Error('turn/start append failed') })
+        })
+        return followup(message)
+      }
+      if (failure === 'context-append') agent.inbox.append('next-step', message)
+      if (failure === 'after-append') agent.inbox.append('next-turn', message)
+      if (failure === 'after-claim') followup(message)
+      throw new Error('action admission notification failed')
+    })
+    const action = { name: 'approve', surfaceId: 'review' }
+    const request = {
+      ...input('action-failed', [{
+        id: 'action-assistant', role: 'assistant', content: '',
+        toolCalls: [{ id: 'action-call', type: 'function', function: { name: 'log_a2ui_event', arguments: JSON.stringify(action) } }],
+      }, {
+        id: 'action-result', role: 'tool', toolCallId: 'action-call',
+        content: 'User performed action "approve" on surface "review". Context: {}',
+      }]),
+      context: [{ description: 'Current page', value: 'review' }],
+      forwardedProps: { a2uiAction: { userAction: action } },
+    }
+    const failed = binding.reserveRun(request, 'action-failed')
+    binding.drive(failed)
+    await failed.done
+    await agent.whenIdle()
+    expect(failed.record.events.at(-1)).toMatchObject({ type: EventType.RUN_ERROR, code: 'AGENT_EXECUTION_ERROR' })
+    expect(agent.inbox.nextStep).toEqual([])
+    expect(agent.inbox.nextTurn).toEqual([])
+    expect(adapter.requests).toHaveLength(0)
+    broken.mockRestore()
+    const retry = await binding.admit({ ...request, runId: 'action-retry' }, 'action-retry', new AbortController().signal)
+    if ('replay' in retry) throw new Error('Expected retry admission')
+    binding.drive(retry)
+    await retry.done
+    expect(adapter.requests).toHaveLength(failure === 'after-claim' ? 0 : 1)
+  })
+
+  it('persists configured opaque metadata only on its admitted render result', async () => {
+    const render = { ...TOOL, name: 'render_a2ui' }
+    const { binding } = await mount([scriptedToolResponse('configured-render', render.name, { value: 'x' }), textResponse('done')])
+    const metadata = { owner: { catalog: 'resolved', foreign: ['opaque'] } }
+    const request = { ...input('configured-meta', [{ id: 'configured-user', role: 'user', content: 'render' }], [render]), forwardedProps: { injectA2UITool: true, toolResultMetadata: { render_a2ui: metadata } } }
+    const run = binding.reserveRun(request, 'configured-meta-digest')
+    binding.drive(run)
+    await run.done
+    expect(run.record.events.find(event => event.type === EventType.TOOL_CALL_RESULT)).toMatchObject({ metadata })
+    const snapshot = run.record.events.at(-2)
+    expect(snapshot).toMatchObject({ type: EventType.MESSAGES_SNAPSHOT, messages: expect.arrayContaining([expect.objectContaining({ role: 'tool', toolCallId: 'configured-render', metadata })]) })
+    expect(binding.liveAgent.session.snapshotEvents().find(event => event.type === 'tool/result')).toMatchObject({ data: { meta: metadata } })
+  })
+
+  it('accepts a run with non-object forwarded properties without configured metadata', async () => {
+    const { binding } = await mount()
+    const request = { ...input('no-props', [{ id: 'no-props-user', role: 'user', content: 'hi' }]), forwardedProps: null }
+    const run = binding.reserveRun(request, 'no-props-digest')
+    binding.drive(run)
+    await run.done
+    expect(run.record.events.at(-1)).toMatchObject({ type: EventType.RUN_FINISHED })
+  })
+
+  it.each([null, [], 5, { render_a2ui: { invalid: undefined } }])('rejects invalid configured metadata before executing a model: %j', async metadata => {
+    const { binding, adapter } = await mount([])
+    const request = { ...input('bad-meta', [{ id: 'bad-meta-user', role: 'user', content: 'hi' }]), forwardedProps: { toolResultMetadata: metadata } }
+    const run = binding.reserveRun(request, 'bad-meta-digest')
+    binding.drive(run)
+    await run.done
+    expect(run.record.events.at(-1)).toMatchObject({ type: EventType.RUN_ERROR, code: 'INVALID_TOOL_RESULT_METADATA' })
+    expect(adapter.requests).toHaveLength(0)
+  })
+
   it('persists frontend Tool metadata without changing its model-facing content', async () => {
     const { adapter, binding } = await mount([
       toolResponse('call-metadata', { value: 'x' }),

@@ -10,6 +10,7 @@ import { EventType, type BaseEvent, type CustomEvent } from '@ag-ui/core'
 import { Context } from '@deepseek-ai/cordis'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
+import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { expect } from 'vitest'
 import AgUiGateway, { TOOL_VIEW_NAME } from 'dsh-ag-ui'
@@ -118,6 +119,8 @@ export interface GatewayMountOptions {
   readonly limits?: { maxRunEvents: number, maxRunEventBytes: number }
   /** Optional stable workspace root shared by process-lifetime recovery tests. */
   readonly workspaceRoot?: string
+  /** Optional durable JSONL root shared by process-lifetime recovery tests. */
+  readonly persistenceRoot?: string
 }
 
 /** Mount one loopback WebServer, test Agent core, scripted model, and Gateway. */
@@ -130,6 +133,9 @@ export async function mountGateway(
   mounted.push(ctx)
   await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
   await mountTestAgentCore(ctx, options.persona)
+  if (options.persistenceRoot !== undefined) {
+    await ctx.plugin(JsonlSessionPersistence, { root: options.persistenceRoot, compression: 'none' })
+  }
   for (const tool of options.tools ?? []) ctx.tools.register(tool)
   const adapter = new ScriptedAdapter(script)
   ctx.llm.registerAdapter(['scripted'], adapter)

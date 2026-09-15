@@ -8,7 +8,7 @@ import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { Context } from '@deepseek-ai/cordis'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
-import { ScriptedAdapter, type ScriptedResponse, textResponse } from './scripted-adapter.ts'
+import { ScriptedAdapter, type ScriptedResponse, textResponse, toolResponse } from './scripted-adapter.ts'
 import { mountTestAgentCore } from './agent-core.ts'
 import AgUiGateway, { Config as GatewayConfig, type Config } from 'dsh-ag-ui'
 import { SessionId } from '@deepseek-ai/dsh-session'
@@ -397,6 +397,21 @@ describe('AG-UI gateway lifecycle', () => {
     expect(history.body).toContain('RUN_FINISHED')
     gate.resolve(textResponse('first-reply'))
     expect((await first.result()).status).toBe(200)
+  })
+
+  it('history reads do not reset the active run render Tool configuration', async () => {
+    const gate = Promise.withResolvers<StreamChunk[]>()
+    const { ctx, url } = await mount({}, [gate.promise, textResponse('render completed')])
+    const renderTool = { ...TOOL, name: 'draw_surface' }
+    const first = postStreaming(url, input({ tools: [renderTool], forwardedProps: { injectA2UITool: renderTool.name } }))
+    await first.started
+    const history = await post(url, input({ runId: 'history', messages: [] }))
+    expect(history.body).toContain('RUN_FINISHED')
+    gate.resolve(toolResponse('render-call', renderTool.name, {}))
+    const result = await first.result()
+    expect(result.body).toContain('render completed')
+    expect(result.body).toContain('rendered')
+    expect(ctx.agents.list()[0]?.status).toBe('idle')
   })
 
   it('rejects a disconnected client after asynchronous thread initialization', async () => {

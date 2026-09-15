@@ -256,6 +256,10 @@ Assistant messages do not acknowledge earlier input, so the companion never disc
 
 If the model calls a browser-owned Tool, the current HTTP run finishes successfully while the DSH Tool Promise remains pending. The browser executes the Tool, appends one standard AG-UI ToolMessage with the same `toolCallId`, and starts another run. The Gateway resolves the original Promise and continues the same DSH turn.
 
+The official `@ag-ui/a2ui-middleware` renders from the streamed Tool arguments and never sends a browser result. The Gateway therefore does not park the render Tool the middleware flags in `forwardedProps.injectA2UITool`: the call settles at once with `{"status":"rendered"}`, its result streams in the same run, and the DSH turn continues. A render Tool a client registers itself still parks like any browser-owned Tool. A later `forwardedProps.a2uiAction` starts the next turn as durable plugin context. That context keeps the readable middleware result plus the complete validated action JSON, including its optional timestamp, with recursively sorted object keys. The Gateway accepts only the middleware's exact bounded action envelope and matching final `log_a2ui_event` assistant/Tool pair; it does not import arbitrary assistant history into DSH.
+
+The synthetic result message ID identifies the action in the native inbox and durable log. Redelivery of the same formed pair is idempotent across HTTP run IDs and restarts; reusing that identity with changed action content is rejected. Each new click needs a new result ID, even when its payload matches an earlier click. Middleware retries must preserve the formed pair identities.
+
 Do not send ordinary browser Tool results through AG-UI `resume[]`; that field is reserved for explicit interrupt/HITL flows.
 
 ## Shared state
@@ -315,6 +319,8 @@ The separate [`dsh-ag-ui-adapter`](packages/dsh-ag-ui-adapter) package is the em
 - Requests must be `POST application/json` and match AG-UI `RunAgentInput`.
 - A normal run accepts one or more new text user messages; they join one DSH turn in arrival order. A run without new messages, including a full already-accepted transcript, only returns the history snapshot; it never waits behind an active run.
 - A continuation accepts one or more new frontend ToolMessages for one pending DSH turn.
+- An official A2UI user-action run accepts its validated `a2uiAction` envelope and matching synthetic `log_a2ui_event` pair; it may also carry the result of a client-owned pending `render_a2ui` call.
+- A render Tool flagged by the middleware in `forwardedProps.injectA2UITool` settles inside its run with `{"status":"rendered"}` and never parks.
 - Standard object metadata on an authenticated pending frontend Tool result is persisted through native DSH presentation metadata and returned by later message snapshots; results without metadata remain unchanged on the wire.
 - One DSH turn can cross multiple AG-UI HTTP runs.
 - Each run emits one `RUN_STARTED` and exactly one `RUN_FINISHED` or `RUN_ERROR`.

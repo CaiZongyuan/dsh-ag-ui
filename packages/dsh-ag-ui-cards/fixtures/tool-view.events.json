@@ -835,7 +835,27 @@
             "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-4:result",
             "content": "{\"path\":\"src/app.ts\",\"offset\":3,\"lines\":[{\"number\":3,\"text\":\"export function start() {\"},{\"number\":4,\"text\":\"  return runtime.boot()\"},{\"number\":5,\"text\":\"}\"}],\"totalLines\":41,\"lang\":\"ts\"}",
             "role": "tool",
-            "toolCallId": "cards-call-4"
+            "toolCallId": "cards-call-4",
+            "metadata": {
+              "path": "src/app.ts",
+              "offset": 3,
+              "lines": [
+                {
+                  "number": 3,
+                  "text": "export function start() {"
+                },
+                {
+                  "number": 4,
+                  "text": "  return runtime.boot()"
+                },
+                {
+                  "number": 5,
+                  "text": "}"
+                }
+              ],
+              "totalLines": 41,
+              "lang": "ts"
+            }
           },
           {
             "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-5:result",
@@ -1172,7 +1192,27 @@
             "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-4:result",
             "content": "{\"path\":\"src/app.ts\",\"offset\":3,\"lines\":[{\"number\":3,\"text\":\"export function start() {\"},{\"number\":4,\"text\":\"  return runtime.boot()\"},{\"number\":5,\"text\":\"}\"}],\"totalLines\":41,\"lang\":\"ts\"}",
             "role": "tool",
-            "toolCallId": "cards-call-4"
+            "toolCallId": "cards-call-4",
+            "metadata": {
+              "path": "src/app.ts",
+              "offset": 3,
+              "lines": [
+                {
+                  "number": 3,
+                  "text": "export function start() {"
+                },
+                {
+                  "number": 4,
+                  "text": "  return runtime.boot()"
+                },
+                {
+                  "number": 5,
+                  "text": "}"
+                }
+              ],
+              "totalLines": 41,
+              "lang": "ts"
+            }
           },
           {
             "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-5:result",
