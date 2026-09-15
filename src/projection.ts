@@ -1,7 +1,13 @@
+import {
+  EventType,
+  type AssistantMessage as AgUiAssistantMessage,
+  type BaseEvent,
+  type CustomEvent,
+  type Message as AgUiMessage,
+} from '@ag-ui/core'
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
-import { EventType, type BaseEvent, type CustomEvent, type Message as AgUiMessage } from '@ag-ui/core'
 import type { ContentBlock, ToolResultBlock } from '@deepseek-ai/dsh-llm'
-import { type SessionId, type SessionEvent, type TurnEndReason } from '@deepseek-ai/dsh-session'
+import { isAppendSurfaceEvent, type SessionId, type SessionEvent, type TurnEndReason } from '@deepseek-ai/dsh-session'
 import {
   parseToolArguments,
   toolViewCallEnvelope,
@@ -326,7 +332,7 @@ export class SessionProjection {
   }
 
   /**
-   * Derive the full AG-UI message history from the durable session log, with
+   * Derive the human transcript from append-origin surface events, with
    * ids identical to the streaming projections: user messages keep the ids the
    * client sent, assistant messages use the step identity, tool results use the
    * call identity.
@@ -335,7 +341,17 @@ export class SessionProjection {
    */
   messagesSnapshot(events: readonly SessionEvent[], userMessageId: (durableId: string) => string | undefined): AgUiMessage[] {
     const messages: AgUiMessage[] = []
+    const stateCalls = new Set<string>()
     for (const event of events) {
+      if (event.type === 'tool/call' && event.data.name === STATE_TOOL_NAME) {
+        stateCalls.add(String(event.data.callId))
+      }
+      if (event.type === 'assistant/message') {
+        for (const block of event.data.message.content) {
+          if (block.type === 'tool-call' && block.name === STATE_TOOL_NAME) stateCalls.add(String(block.id))
+        }
+      }
+      if (!isAppendSurfaceEvent(event)) continue
       if (event.type === 'user/message') {
         if (event.data.source.kind !== 'user') continue
         const id = userMessageId(String(event.data.id))
@@ -343,20 +359,24 @@ export class SessionProjection {
         messages.push({ id, role: 'user', content: joinText(event.data.content) })
       } else if (event.type === 'assistant/message') {
         const text = joinText(event.data.message.content)
-        if (text === '') continue
+        const toolCalls = assistantToolCalls(event.data.message.content)
+        if (text === '' && toolCalls.length === 0) continue
         messages.push({
           id: assistantMessageId(this.sessionId, event.data.turn, event.data.step),
           role: 'assistant',
-          content: text,
+          ...(text === '' ? {} : { content: text }),
+          ...(toolCalls.length === 0 ? {} : { toolCalls }),
         })
       } else if (event.type === 'tool/result') {
         const block = event.data.message.content[0]
         const callId = String(block.toolCallId)
+        if (stateCalls.has(callId)) continue
         messages.push({
           id: resultMessageId(this.sessionId, callId),
           role: 'tool',
           toolCallId: callId,
           content: renderToolResult(block),
+          ...(block.isError ? { error: renderToolResult(block) || 'Tool execution failed' } : {}),
         })
       }
     }
@@ -380,7 +400,7 @@ export class SessionProjection {
     for (const event of events) {
       if (event.type === 'tool/call') {
         calls.set(String(event.data.callId), { toolName: event.data.name, args: parseToolArguments(event.data.arguments) })
-      } else if (event.type === 'tool/result') {
+      } else if (event.type === 'tool/result' && isAppendSurfaceEvent(event)) {
         const block = event.data.message.content[0]
         const callId = String(block.toolCallId)
         const call = calls.get(callId)
@@ -425,6 +445,17 @@ function resultMessageId(sessionId: SessionId, callId: string): string {
 /** Names of the tool calls one assistant message announced, in model order. */
 function announcedToolNames(content: readonly ContentBlock[]): string[] {
   return content.filter(block => block.type === 'tool-call').map(block => block.name)
+}
+
+/** Rebuild the AG-UI assistant Tool calls announced by one durable DSH message. */
+function assistantToolCalls(content: readonly ContentBlock[]): NonNullable<AgUiAssistantMessage['toolCalls']> {
+  return content
+    .filter((block): block is Extract<ContentBlock, { type: 'tool-call' }> => block.type === 'tool-call' && block.name !== STATE_TOOL_NAME)
+    .map(block => ({
+      id: String(block.id),
+      type: 'function',
+      function: { name: block.name, arguments: block.arguments },
+    }))
 }
 
 /** Concatenate the text blocks of one message's content. */

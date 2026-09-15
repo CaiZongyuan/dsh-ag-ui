@@ -344,6 +344,8 @@ Backend Tool result 会发出 `TOOL_CALL_RESULT`。Frontend Tool result 不在 A
 - 保留 Tool `ag_ui_update_state` 与客户端提供的 frontend Tool 被排除：state Tool 经 `STATE_SNAPSHOT` 投影，客户端本来就了解如何呈现自己的 Tool。
 - 每个 run 开始时，Gateway 会从 durable session log 重新推导整个转录的已结算 card——与 live 路径使用相同的求值器与输入——并在 `MESSAGES_SNAPSHOT` 之后立即发出，因此错过 live 流的客户端也能渲染出完全一致的 card。冷读取只会为仍在该 thread scope 内可解析的 Tool 重新推导 card，因此重启后由崩溃恢复物化的 frontend Tool 调用不会带 card。card 计入 run 的事件预算。
 
+保留的 `ag_ui_update_state` 调用与结果仅用于协议状态管理，不会出现在实时事件或恢复的消息历史中。
+
 独立的 [`dsh-ag-ui-cards`](packages/dsh-ag-ui-cards) React 包基于这些 envelope 渲染全部 card 种类，不依赖任何 DSH runtime，并给出了事件接线配方。其组件测试渲染录制自本 Gateway 的事件，录制场景由本仓库的测试套件持续守护。
 
 ## 生命周期

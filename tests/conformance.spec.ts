@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { HttpAgent } from '@ag-ui/client'
-import { EventType, type BaseEvent, type Tool, type ToolCallResultEvent } from '@ag-ui/core'
+import { EventType, type BaseEvent, type Tool, type ToolCallResultEvent, type ToolCallStartEvent } from '@ag-ui/core'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { disposeMountedContexts, expectLifecycleValid, mountGateway, runAgentEvents } from './harness.ts'
@@ -110,11 +110,24 @@ describe('AG-UI five-feature conformance', () => {
     const second = await runAgentEvents(agent, 'history-run-2', [])
 
     const streamedAssistant = first.find(event => event.type === EventType.TEXT_MESSAGE_START)
+    const streamedCall = first.find((event): event is ToolCallStartEvent => event.type === EventType.TOOL_CALL_START)
     const streamedResult = first.find((event): event is ToolCallResultEvent =>
       event.type === EventType.TOOL_CALL_RESULT)
     const snapshot = second.find(event => event.type === EventType.MESSAGES_SNAPSHOT)
     expect(snapshot?.messages).toEqual([
       { id: 'history-user', role: 'user', content: 'Look up record 7.' },
+      {
+        id: streamedCall?.parentMessageId,
+        role: 'assistant',
+        toolCalls: [{
+          id: 'conformance-history-call',
+          type: 'function',
+          function: {
+            name: BACKEND_TOOL.name,
+            arguments: '{"recordId":"record-7"}',
+          },
+        }],
+      },
       {
         id: streamedResult?.messageId,
         role: 'tool',

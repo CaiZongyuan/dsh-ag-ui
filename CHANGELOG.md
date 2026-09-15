@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Bidirectional shared state with `STATE_SNAPSHOT` and the reserved `ag_ui_update_state` Tool.
 - Dojo-compatible keyless examples for chat, backend Tools, shared state, HITL, and tool-based generative UI.
 
+### Fixed
+
+- `MESSAGES_SNAPSHOT` now reconstructs assistant Tool calls from durable DSH messages, so Tool-only assistant messages and their results remain correlated after replay.
+
 ### Changed
 
 - Updated Gateway and adapter peers to DeepSeek Harness `0.1.5-alpha.1`; live text now consumes `agent/assistant-stream`, history uses session snapshots, and Agent setup uses the explicit callback argument.

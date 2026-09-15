@@ -565,6 +565,76 @@
             "content": "Record every card kind."
           },
           {
+            "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:1:1:assistant",
+            "role": "assistant",
+            "toolCalls": [
+              {
+                "id": "cards-call-1",
+                "type": "function",
+                "function": {
+                  "name": "notes_check",
+                  "arguments": "{\"path\":\"notes.md\"}"
+                }
+              },
+              {
+                "id": "cards-call-2",
+                "type": "function",
+                "function": {
+                  "name": "suite_run",
+                  "arguments": "{\"suite\":\"unit\"}"
+                }
+              },
+              {
+                "id": "cards-call-3",
+                "type": "function",
+                "function": {
+                  "name": "greeting_write",
+                  "arguments": "{\"text\":\"hello dsh\"}"
+                }
+              },
+              {
+                "id": "cards-call-4",
+                "type": "function",
+                "function": {
+                  "name": "file_read",
+                  "arguments": "{\"path\":\"src/app.ts\"}"
+                }
+              },
+              {
+                "id": "cards-call-5",
+                "type": "function",
+                "function": {
+                  "name": "text_search",
+                  "arguments": "{\"query\":\"dsh:tool:view\"}"
+                }
+              },
+              {
+                "id": "cards-call-6",
+                "type": "function",
+                "function": {
+                  "name": "config_glob",
+                  "arguments": "{\"pattern\":\"*.config.ts\"}"
+                }
+              },
+              {
+                "id": "cards-call-7",
+                "type": "function",
+                "function": {
+                  "name": "web_search",
+                  "arguments": "{\"query\":\"AG-UI protocol\"}"
+                }
+              },
+              {
+                "id": "cards-call-8",
+                "type": "function",
+                "function": {
+                  "name": "web_fetch",
+                  "arguments": "{\"url\":\"https://ag-ui.com/\"}"
+                }
+              }
+            ]
+          },
+          {
             "id": "ag-ui:ag-ui-a8363bf0a4b03cf8b8c250a496625d58d2fa0456:cards-call-1:result",
             "content": "3 headings, 12 lines",
             "role": "tool",

@@ -344,6 +344,8 @@ Every backend Tool call carries its DSH render-intent card next to the standard 
 - The reserved `ag_ui_update_state` Tool and client-provided frontend Tools are excluded: the state Tool projects through `STATE_SNAPSHOT`, and the client already knows how to present its own Tools.
 - At each run start, the Gateway re-derives the settled cards of the whole transcript from the durable session log — the same evaluator and inputs as the live path — and emits them right after `MESSAGES_SNAPSHOT`, so a client that missed the live stream renders identical cards. A cold read only re-derives cards for Tools that still resolve in the thread's scope, so a crash-materialized frontend Tool call after a restart stays cardless. Cards count against the per-run event budget.
 
+The reserved `ag_ui_update_state` call and result remain protocol-only in live events and restored message history.
+
 The separate [`dsh-ag-ui-cards`](packages/dsh-ag-ui-cards) React package renders every card kind from these envelopes with no DSH runtime dependency, and documents the event-wiring recipe. Its component tests render events recorded from this Gateway, and the recording scenario stays guarded by this package's test suite.
 
 ## Lifecycle
