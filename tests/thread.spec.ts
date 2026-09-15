@@ -11,6 +11,7 @@ import { type ScriptedResponse, ScriptedAdapter, textResponse, toolCallsResponse
 import { mountTestAgentCore } from './agent-core.ts'
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionProjection } from '../src/projection.ts'
 import { ThreadBinding, type ThreadOptions } from '../src/thread.ts'
 import { AgUiGatewayError } from '../src/errors.ts'
 
@@ -664,8 +665,8 @@ describe('ThreadBinding run admission', () => {
     await corrected.done
 
     expect(corrected.record.events.at(-1)).toMatchObject({ type: EventType.RUN_FINISHED })
-    expect(firstResolve).toHaveBeenCalledWith({ content: 'first', presentationMeta: { valid: true } })
-    expect(secondResolve).toHaveBeenCalledWith({ content: 'second', presentationMeta: { valid: true } })
+    expect(firstResolve).toHaveBeenCalledWith({ content: 'first', presentationMeta: { valid: true, '@dsh-ag-ui/frontend-result-id': { id: 'batch-result-1', hasMetadata: true } } })
+    expect(secondResolve).toHaveBeenCalledWith({ content: 'second', presentationMeta: { valid: true, '@dsh-ag-ui/frontend-result-id': { id: 'batch-result-2', hasMetadata: true } } })
   })
 
   it('reports a full ledger when its oldest entry is active', async () => {
@@ -777,6 +778,9 @@ describe('ThreadBinding frontend Tools', () => {
     expect(binding.liveAgent.session.snapshotEvents().some(event => event.type === 'tool/result'
       && event.data.message.content[0].isError === true)).toBe(true)
     expect(result.record.events.at(-1)?.type).toBe(EventType.RUN_FINISHED)
+    const snapshot = new SessionProjection(binding.sessionId, { resolve: () => undefined, isFrontendTool: () => false })
+      .messagesSnapshot(binding.liveAgent.session.snapshotEvents(), () => undefined)
+    expect(snapshot.find(message => message.role === 'tool')?.id).toBe(`ag-ui:${String(binding.sessionId)}:call-1:result`)
   })
 
   it.each(['context-append', 'before-append', 'after-append', 'after-claim', 'turn-start'] as const)('contains failed action admission %s without retrying consumed work', async failure => {

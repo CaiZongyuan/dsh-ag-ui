@@ -384,6 +384,7 @@ Upstream Dojo 的 integration registry 是静态源码，目前没有 `deepseek-
 - Continuation 接受属于一个 pending DSH turn 的一条或多条新 frontend ToolMessages。
 - 官方 A2UI user-action run 接受经过校验的 `a2uiAction` envelope 与匹配的 synthetic `log_a2ui_event` pair；它也可以同时携带客户端自有 pending `render_a2ui` 调用的 result。
 - middleware 在 `forwardedProps.injectA2UITool` 中标记的 render Tool 会在其 run 内以 `{"status":"rendered"}` 结算，从不 park。
+- 成功的 frontend Tool result 在 durable history 和 cold resume 中保留已接受的 AG-UI message id、可选的 `encryptedValue` 和 `subagentRunId`，以及 metadata 为空对象或缺失的区别。Gateway 在原生 presentation metadata 中保留 `@dsh-ag-ui/frontend-result-id` 字段，覆盖 client 提供的该字段，并从 wire metadata 和 presenter 输入中删除它。重发原始结果或其投影 snapshot 都是幂等的；Gateway 从 durable result 恢复 admission digest，因此即使在重启后的首次请求中，修改公开的结果字段也会产生冲突。旧结果与 server-owned 结果继续使用基于 call 的确定性 id。失败的 frontend result 保持原生 DSH rejection 语义和确定性 fallback，因为 rejection 没有 presentation-metadata hook。
 - 已认证 pending frontend Tool result 上的标准对象 metadata 会通过原生 DSH presentation metadata 持久化，并由后续 message snapshot 返回；没有 metadata 的结果在 wire 上保持不变。
 - 一个 DSH turn 可以跨多个 AG-UI HTTP runs。
 - 每个 run 发出一个 `RUN_STARTED` 和恰好一个 `RUN_FINISHED` 或 `RUN_ERROR`。

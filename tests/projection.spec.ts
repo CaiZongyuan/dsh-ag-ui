@@ -222,6 +222,21 @@ describe('SessionProjection tool view cards', () => {
     isFrontendTool: name => name === 'ui_action',
   }
 
+  it.each([null, [], 'native', {}, { kept: true, '@dsh-ag-ui/frontend-result-id': 'browser' }])(
+    'preserves native presenter metadata while hiding gateway identity (%s)', meta => {
+      const projection = new SessionProjection(sessionId, declaring)
+      const call = toolCall('view', 'view_tool')
+      const result = toolResult('view', false, meta)
+      projection.project(call, 1)
+      const live = projection.project(result, 1).events
+      const cold = projection.toolViewEvents([call, result])
+      const publicMeta = meta !== null && typeof meta === 'object' && 'kept' in meta ? { kept: true } : meta
+      expect(trailingEnvelope(live).card).toMatchObject({ content: [{ type: 'text', text: `meta ${JSON.stringify(publicMeta)}` }] })
+      expect(cold).toEqual([live.at(-1)])
+      expect(JSON.stringify(live)).not.toContain('@dsh-ag-ui/frontend-result-id')
+    },
+  )
+
   it('carries the declared call and result intents, including the durable meta', () => {
     const projection = new SessionProjection(sessionId, declaring, (seq, index) => `/files/${seq}/${index}`)
     const call = projection.project(event('tool/call', {
@@ -450,6 +465,27 @@ describe('SessionProjection history snapshot', () => {
       { id: 'ag-ui:ag-ui-projection-test:visible:result', role: 'tool', toolCallId: 'visible', content: 'result of visible' },
     ] : [])
     expect(live.messagesSnapshot(events, () => undefined)).toEqual(messages)
+  })
+
+  it.each([
+    { id: 'browser-id', hasMetadata: true },
+    { id: '', hasMetadata: true },
+    null, 42, [], {},
+    { id: 42, hasMetadata: true },
+    { id: 'browser', hasMetadata: 'invalid' },
+    { id: 'browser', hasMetadata: true, encryptedValue: 42 },
+    { id: 'browser', hasMetadata: true, subagentRunId: 42 },
+  ])('reads only valid durable frontend identities and strips the private field (%s)', identity => {
+    const projection = new SessionProjection(sessionId, presenter)
+    const metadata = { '@dsh-ag-ui/frontend-result-id': identity, a2ui: { owner: 'call' } }
+    const result = toolResult('call', false, metadata)
+    const expectedId = identity !== null && typeof identity === 'object' && 'id' in identity
+      && (identity.id === 'browser-id' || identity.id === '') ? identity.id : 'ag-ui:ag-ui-projection-test:call:result'
+    expect(projection.project(result, 1).events).toMatchObject([{ messageId: expectedId, metadata: { a2ui: { owner: 'call' } } }])
+    expect(projection.messagesSnapshot([result], () => undefined)).toEqual([{
+      id: expectedId, role: 'tool', toolCallId: 'call', content: 'result of call', metadata: { a2ui: { owner: 'call' } },
+    }])
+    expect(metadata).toEqual({ '@dsh-ag-ui/frontend-result-id': identity, a2ui: { owner: 'call' } })
   })
 
   it('projects object presentation metadata through live results and restored history', () => {
