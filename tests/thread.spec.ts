@@ -90,7 +90,7 @@ async function settle(controller: ReturnType<ThreadBinding['reserveRun']>): Prom
 
 interface TestPendingCall {
   turn: number
-  resolve(value: string): void
+  resolve(value: { content: string, presentationMeta?: unknown }): void
   reject(error: Error): void
 }
 
@@ -573,6 +573,50 @@ describe('ThreadBinding run admission', () => {
     ])).toThrow('different DSH turns')
   })
 
+  it('validates every result metadata value before mutating a continuation batch', async () => {
+    const { binding } = await mount([])
+    const state = internals(binding)
+    const firstResolve = vi.fn()
+    const secondResolve = vi.fn()
+    state.pendingCalls.set('batch-call-1', { turn: 1, resolve: firstResolve, reject: vi.fn() })
+    state.pendingCalls.set('batch-call-2', { turn: 1, resolve: secondResolve, reject: vi.fn() })
+    const firstMessage = {
+      id: 'batch-result-1',
+      role: 'tool' as const,
+      toolCallId: 'batch-call-1',
+      content: 'first',
+      metadata: { valid: true },
+    }
+    const invalid = binding.reserveRun(input('batch-invalid', [firstMessage, {
+      id: 'batch-result-2',
+      role: 'tool',
+      toolCallId: 'batch-call-2',
+      content: 'second',
+      metadata: { invalid: undefined },
+    }]), 'batch-invalid-digest')
+
+    binding.drive(invalid)
+    await invalid.done
+
+    expect(invalid.record.events.at(-1)).toMatchObject({ code: 'INVALID_TOOL_RESULT_METADATA' })
+    expect(firstResolve).not.toHaveBeenCalled()
+    expect(secondResolve).not.toHaveBeenCalled()
+
+    const corrected = binding.reserveRun(input('batch-corrected', [firstMessage, {
+      id: 'batch-result-2',
+      role: 'tool',
+      toolCallId: 'batch-call-2',
+      content: 'second',
+      metadata: { valid: true },
+    }]), 'batch-corrected-digest')
+    binding.drive(corrected)
+    await corrected.done
+
+    expect(corrected.record.events.at(-1)).toMatchObject({ type: EventType.RUN_FINISHED })
+    expect(firstResolve).toHaveBeenCalledWith({ content: 'first', presentationMeta: { valid: true } })
+    expect(secondResolve).toHaveBeenCalledWith({ content: 'second', presentationMeta: { valid: true } })
+  })
+
   it('reports a full ledger when its oldest entry is active', async () => {
     const { binding } = await mount([], { maxRunsPerThread: 1 })
     const read = await binding.admit(input('active-history', []), 'history', new AbortController().signal)
@@ -684,6 +728,68 @@ describe('ThreadBinding frontend Tools', () => {
     expect(result.record.events.at(-1)?.type).toBe(EventType.RUN_FINISHED)
   })
 
+  it('persists frontend Tool metadata without changing its model-facing content', async () => {
+    const { adapter, binding } = await mount([
+      toolResponse('call-metadata', { value: 'x' }),
+      textResponse('handled metadata'),
+    ])
+    const first = binding.reserveRun(input(
+      'run-metadata-1',
+      [{ id: 'message-metadata', role: 'user', content: 'call it' }],
+      [TOOL],
+    ), 'digest-metadata-1')
+    binding.drive(first)
+    await first.done
+    const metadata = { a2ui: { ownerToolCallId: 'presentation-owner' } }
+    const result = binding.reserveRun(input('run-metadata-2', [{
+      id: 'result-metadata',
+      role: 'tool',
+      toolCallId: 'call-metadata',
+      content: 'browser-rendered',
+      metadata,
+    }], [TOOL]), 'digest-metadata-2')
+
+    binding.drive(result)
+    await result.done
+    await binding.liveAgent.whenIdle()
+
+    const durable = binding.liveAgent.session.snapshotEvents().find(event => event.type === 'tool/result'
+      && String(event.data.message.content[0].toolCallId) === 'call-metadata')
+    expect(durable).toMatchObject({ data: { meta: metadata } })
+    expect(durable?.data.message.content[0].content).toEqual([{ type: 'text', text: 'browser-rendered' }])
+    expect(adapter.requests[1]?.messages.some(message => message.content.some(block =>
+      block.type === 'tool-result'
+      && String(block.toolCallId) === 'call-metadata'
+      && block.content.some(content => content.type === 'text' && content.text === 'browser-rendered')))).toBe(true)
+  })
+
+  it('rejects non-lossless frontend Tool metadata before settling the pending call', async () => {
+    const { binding } = await mount([toolResponse('call-invalid-metadata', { value: 'x' })])
+    const first = binding.reserveRun(input(
+      'run-invalid-metadata-1',
+      [{ id: 'message-invalid-metadata', role: 'user', content: 'call it' }],
+      [TOOL],
+    ), 'digest-invalid-metadata-1')
+    binding.drive(first)
+    await first.done
+    const result = binding.reserveRun(input('run-invalid-metadata-2', [{
+      id: 'result-invalid-metadata',
+      role: 'tool',
+      toolCallId: 'call-invalid-metadata',
+      content: 'browser-rendered',
+      metadata: { invalid: undefined },
+    }], [TOOL]), 'digest-invalid-metadata-2')
+
+    binding.drive(result)
+    await result.done
+
+    expect(result.record.events.at(-1)).toMatchObject({
+      type: EventType.RUN_ERROR,
+      code: 'INVALID_TOOL_RESULT_METADATA',
+    })
+    expect(binding.liveAgent.session.snapshotEvents().some(event => event.type === 'tool/result')).toBe(false)
+  })
+
   it('times out a pending frontend Tool without sleeping', async () => {
     const { binding } = await mount([toolResponse('call-timeout', { value: 'x' })], { frontendToolTimeoutMs: 60_000 })
     const controller = binding.reserveRun(input('run-1', [{ id: 'message-1', role: 'user', content: 'call it' }], [TOOL]), 'digest')
@@ -708,7 +814,8 @@ describe('ThreadBinding frontend Tools', () => {
     const replacement = binding.liveAgent.ctx.tools.get(TOOL.name, binding.liveAgent)
     expect(replacement).not.toBe(first)
     expect(replacement?.presentCall?.({ value: 'x' })).toEqual({ card: 'generic', title: changed.description, rawInput: { value: 'x' } })
-    expect(replacement?.output.render({}, 7)).toEqual([{ type: 'text', text: '7' }])
+    expect(replacement?.output.render({}, { content: '7' })).toEqual([{ type: 'text', text: '7' }])
+    expect(replacement?.output.presentationMeta?.({}, { content: '7' })).toBeNull()
     state.applyFrontendTools([])
     expect(binding.liveAgent.ctx.tools.get(TOOL.name, binding.liveAgent)).toBeUndefined()
   })

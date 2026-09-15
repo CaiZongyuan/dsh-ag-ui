@@ -17,6 +17,7 @@ import {
   type ToolDefinition,
   type ToolRunContext,
 } from '@deepseek-ai/dsh-tools'
+import { isJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import { isDeepStrictEqual } from 'node:util'
 import { AgUiGatewayError } from './errors.ts'
 import { jsonBytes, valueDigest } from './json.ts'
@@ -66,8 +67,13 @@ interface FrontendToolRegistration {
 
 interface PendingFrontendCall {
   readonly turn: number
-  resolve(value: string): void
+  resolve(value: FrontendToolResultValue): void
   reject(error: Error): void
+}
+
+type FrontendToolResultValue = {
+  readonly content: string
+  readonly presentationMeta?: JsonValue
 }
 
 interface PreparedFrontendTool {
@@ -334,6 +340,11 @@ export class ThreadBinding {
       }
 
       const turn = this.continuationTurn(admission.messages)
+      for (const message of admission.messages) {
+        if (message.error === undefined && message.metadata !== undefined && !isJsonValue(message.metadata)) {
+          throw new AgUiGatewayError('INVALID_TOOL_RESULT_METADATA', 'Frontend Tool result metadata must be lossless JSON.')
+        }
+      }
       this.emitHistory(controller, [])
       /* v8 ignore next -- a continuation whose history snapshot overflowed the run budget is already settled; the user path covers the same guard. */
       if (controller.record.state !== 'active') return
@@ -353,7 +364,12 @@ export class ThreadBinding {
         }
         this.acceptedMessages.set(message.id, { role: 'tool', digest: valueDigest(message) })
         this.projection.markAwaitingResult(message.toolCallId)
-        if (message.error === undefined) pending.resolve(message.content)
+        if (message.error === undefined) {
+          pending.resolve({
+            content: message.content,
+            ...(message.metadata === undefined ? {} : { presentationMeta: structuredClone(message.metadata) }),
+          })
+        }
         else pending.reject(new Error(`Frontend Tool failed: ${message.error}`))
       }
       // a partial resolution leaves calls parked; finish so the client can answer the rest
@@ -731,9 +747,22 @@ export class ThreadBinding {
       description: item.tool.description,
       parameters: item.schema,
       output: {
-        schema: { type: 'string' },
+        schema: {
+          type: 'object',
+          properties: {
+            content: { type: 'string' },
+            presentationMeta: { type: 'object', additionalProperties: true },
+          },
+          required: ['content'],
+          additionalProperties: false,
+        },
         render(_args, value) {
-          return [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }]
+          const result = value as FrontendToolResultValue
+          return [{ type: 'text', text: result.content }]
+        },
+        presentationMeta(_args, value) {
+          const result = value as FrontendToolResultValue
+          return result.presentationMeta ?? null
         },
       },
       presentCall: args => ({ card: 'generic', title: item.tool.description, rawInput: args }),
@@ -748,7 +777,7 @@ export class ThreadBinding {
     schema: ObjectJsonSchema,
     args: unknown,
     exec: ToolRunContext,
-  ): Promise<string> {
+  ): Promise<FrontendToolResultValue> {
     assertFrontendToolArgs(schema, args)
     const callId = String(exec.callId)
     const lifecycle = this.projection.lifecycleOf(callId)
@@ -756,7 +785,7 @@ export class ThreadBinding {
     const active = this.activeRun
     this.projection.markParked(callId, lifecycle)
 
-    const deferred = Promise.withResolvers<string>()
+    const deferred = Promise.withResolvers<FrontendToolResultValue>()
     let settled = false
     const settle = (operation: () => void): void => {
       /* v8 ignore next -- late timeout, abort, or browser completion is an idempotent no-op. */

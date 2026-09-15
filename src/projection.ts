@@ -237,6 +237,7 @@ export class SessionProjection {
           toolCallId: callId,
           content: renderToolResult(block),
           role: 'tool',
+          ...(isUnknownRecord(event.data.meta) ? { metadata: structuredClone(event.data.meta) } : {}),
         }
         if (lifecycle === undefined) return { events: [result] }
         return {
@@ -395,12 +396,14 @@ export class SessionProjection {
         const block = event.data.message.content[0]
         const callId = String(block.toolCallId)
         if (stateCalls.has(callId)) continue
+        const metadata = isUnknownRecord(event.data.meta) ? structuredClone(event.data.meta) : undefined
         messages.push({
           id: resultMessageId(this.sessionId, callId),
           role: 'tool',
           toolCallId: callId,
           content: renderToolResult(block),
           ...(block.isError ? { error: renderToolResult(block) || 'Tool execution failed' } : {}),
+          ...(metadata === undefined ? {} : { metadata }),
         })
       }
     }
@@ -480,6 +483,10 @@ function assistantToolCalls(content: readonly ContentBlock[]): NonNullable<AgUiA
       type: 'function',
       function: { name: block.name, arguments: block.arguments },
     }))
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /** Concatenate the text blocks of one message's content. */

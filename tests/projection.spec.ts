@@ -63,7 +63,7 @@ function assistantToolAnnouncement(turn: number, count: number): SessionEvent {
   })
 }
 
-function toolResult(callId: string, isError = false): SessionEvent {
+function toolResult(callId: string, isError = false, meta?: unknown): SessionEvent {
   return event('tool/result', {
     turn: 1,
     step: 1,
@@ -72,6 +72,7 @@ function toolResult(callId: string, isError = false): SessionEvent {
       isError,
       content: [{ type: 'text', text: `result of ${callId}` }],
     }),
+    ...(meta === undefined ? {} : { meta }),
   })
 }
 
@@ -449,6 +450,21 @@ describe('SessionProjection history snapshot', () => {
       { id: 'ag-ui:ag-ui-projection-test:visible:result', role: 'tool', toolCallId: 'visible', content: 'result of visible' },
     ] : [])
     expect(live.messagesSnapshot(events, () => undefined)).toEqual(messages)
+  })
+
+  it('projects object presentation metadata through live results and restored history', () => {
+    const projection = new SessionProjection(sessionId, presenter)
+    const metadata = { a2ui: { ownerToolCallId: 'presentation-owner' } }
+    const result = toolResult('with-metadata', false, metadata)
+    expect(projection.project(result, 1).events).toMatchObject([{ metadata }])
+    expect(projection.messagesSnapshot([result], () => undefined)).toMatchObject([{ metadata }])
+  })
+
+  it.each([undefined, null, []])('omits non-object presentation metadata (%s)', metadata => {
+    const projection = new SessionProjection(sessionId, presenter)
+    const result = toolResult('without-metadata', false, metadata)
+    expect(projection.project(result, 1).events[0]).not.toHaveProperty('metadata')
+    expect(projection.messagesSnapshot([result], () => undefined)[0]).not.toHaveProperty('metadata')
   })
 
   it('derives the full history, including tool-only assistant messages in durable order', () => {
