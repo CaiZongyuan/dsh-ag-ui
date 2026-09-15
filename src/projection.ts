@@ -10,6 +10,7 @@ import { deliverableMessage, isPresentedEvent } from './deliverables.ts'
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock, ToolResultBlock, UserMessage } from '@deepseek-ai/dsh-llm'
 import { isAppendSurfaceEvent, type SessionId, type SessionEvent, type TurnEndReason } from '@deepseek-ai/dsh-session'
+import { projectedResultMeta } from './frontend-result.ts'
 import {
   parseToolArguments,
   toolViewCallEnvelope,
@@ -242,19 +243,21 @@ export class SessionProjection {
           return EMPTY_STEP
         }
         if (lifecycle?.kind === 'frontend' || lifecycle?.kind === 'awaiting') return EMPTY_STEP
+        const { id, metadata, ...identity } = projectedResultMeta(event.data.meta)
         const result = {
           type: EventType.TOOL_CALL_RESULT,
-          messageId: resultMessageId(this.sessionId, callId),
+          messageId: id ?? resultMessageId(this.sessionId, callId),
+          ...identity,
           toolCallId: callId,
           content: renderToolResult(block),
           role: 'tool',
-          ...(isUnknownRecord(event.data.meta) ? { metadata: structuredClone(event.data.meta) } : {}),
+          ...(isUnknownRecord(metadata) ? { metadata } : {}),
         }
         if (lifecycle === undefined) return { events: [result] }
         return {
           events: [
             result,
-            toolViewEvent(toolViewResultEnvelope(callId, lifecycle.name, args, toolViewResultOf(block, event.data.meta), this.presenter)),
+            toolViewEvent(toolViewResultEnvelope(callId, lifecycle.name, args, toolViewResultOf(block, metadata), this.presenter)),
           ],
         }
       }
@@ -371,7 +374,7 @@ export class SessionProjection {
    * Derive the human transcript from append-origin surface events, with
    * ids identical to the streaming projections: user messages keep the ids the
    * client sent, assistant messages use the step identity, tool results use the
-   * call identity.
+   * accepted frontend result id, falling back to the call identity for older or server results.
    * @param events - the session's durable event log, in order.
    * @param userMessageId - durable user message id to the client's AG-UI id; unmapped messages (injected context, foreign sessions) are skipped.
    */
@@ -411,14 +414,15 @@ export class SessionProjection {
         const block = event.data.message.content[0]
         const callId = String(block.toolCallId)
         if (stateCalls.has(callId)) continue
-        const metadata = isUnknownRecord(event.data.meta) ? structuredClone(event.data.meta) : undefined
+        const { id, metadata, ...identity } = projectedResultMeta(event.data.meta)
         messages.push({
-          id: resultMessageId(this.sessionId, callId),
+          id: id ?? resultMessageId(this.sessionId, callId),
+          ...identity,
           role: 'tool',
           toolCallId: callId,
           content: renderToolResult(block),
           ...(block.isError ? { error: renderToolResult(block) || 'Tool execution failed' } : {}),
-          ...(metadata === undefined ? {} : { metadata }),
+          ...(isUnknownRecord(metadata) ? { metadata } : {}),
         })
       }
     }
@@ -451,7 +455,7 @@ export class SessionProjection {
         if (call.toolName === STATE_TOOL_NAME
           || this.presenter.isFrontendTool(call.toolName)
           || this.presenter.resolve(call.toolName) === undefined) continue
-        envelopes.push(toolViewResultEnvelope(callId, call.toolName, call.args, toolViewResultOf(block, event.data.meta), this.presenter))
+        envelopes.push(toolViewResultEnvelope(callId, call.toolName, call.args, toolViewResultOf(block, projectedResultMeta(event.data.meta).metadata), this.presenter))
       }
     }
     return envelopes.map(toolViewEvent)

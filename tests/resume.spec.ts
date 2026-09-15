@@ -7,7 +7,7 @@ import { Context } from '@deepseek-ai/cordis'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { EventType, type RunAgentInput } from '@ag-ui/core'
-import { ScriptedAdapter, textResponse } from './scripted-adapter.ts'
+import { ScriptedAdapter, textResponse, toolResponse } from './scripted-adapter.ts'
 import { mountTestAgentCore } from './agent-core.ts'
 import { durableSessionId } from '../src/session-id.ts'
 import { ThreadBinding, type ThreadOptions } from '../src/thread.ts'
@@ -72,6 +72,76 @@ function eventsOf(controller: ReturnType<ThreadBinding['reserveRun']>) {
 }
 
 describe('ThreadBinding durable resume', () => {
+  it.each([undefined, {}, { '@dsh-ag-ui/frontend-result-id': 'forged' }, { a2ui: { ownerToolCallId: 'owner' }, '@dsh-ag-ui/frontend-result-id': 'forged' }])(
+    'keeps an accepted frontend result identity across native persistence and cold replay (%s)', async metadata => {
+      const initialMetadata = structuredClone(metadata)
+      const tool = { name: 'browser_action', description: 'Browser action', parameters: { type: 'object', properties: {} } }
+      const first = await mountDurable([toolResponse('browser-call', tool.name, {}), textResponse('done'), textResponse('warm'), textResponse('warm again')])
+      const binding = bindingFor(first.ctx, first.root)
+      await binding.initialize()
+      const start = binding.reserveRun({ ...input('start', [{ id: 'user-1', role: 'user', content: 'Act' }]), tools: [tool] }, 'start')
+      binding.drive(start)
+      await start.done
+      const accepted = { id: metadata === undefined ? '' : 'arbitrary-browser-result', encryptedValue: 'opaque-result', subagentRunId: 'child-run', role: 'tool' as const, toolCallId: 'browser-call', content: 'rendered', ...(metadata === undefined ? {} : { metadata }) }
+      const finish = binding.reserveRun({ ...input('finish', [accepted]), tools: [tool] }, 'finish')
+      binding.drive(finish)
+      await finish.done
+      await binding.liveAgent.whenIdle()
+      expect(eventsOf(finish).at(-1)).toMatchObject({ type: EventType.RUN_FINISHED })
+      expect(eventsOf(finish).some(event => event.type === EventType.TOOL_CALL_RESULT)).toBe(false)
+      const durable = binding.liveAgent.session.snapshotEvents().filter(event => event.type === 'tool/result')
+      expect(durable).toHaveLength(1)
+      expect(durable[0]).toMatchObject({ data: { meta: { '@dsh-ag-ui/frontend-result-id': { id: accepted.id, hasMetadata: metadata !== undefined } } } })
+      expect(JSON.stringify(first.adapter.requests[1]?.messages)).not.toContain('@dsh-ag-ui/frontend-result-id')
+      expect(metadata).toEqual(initialMetadata)
+      const warm = binding.reserveRun(input('warm', [accepted, { id: 'warm-user', role: 'user', content: 'Warm' }]), 'warm')
+      binding.drive(warm)
+      await warm.done
+      await binding.liveAgent.whenIdle()
+      const warmSnapshot = eventsOf(warm).find(event => event.type === EventType.MESSAGES_SNAPSHOT)
+      if (warmSnapshot?.type !== EventType.MESSAGES_SNAPSHOT) throw new Error('missing warm snapshot')
+      const warmEcho = binding.reserveRun(input('warm-echo', [...warmSnapshot.messages, { id: 'warm-user-2', role: 'user', content: 'Echo' }]), 'warm-echo')
+      binding.drive(warmEcho)
+      await warmEcho.done
+      await binding.liveAgent.whenIdle()
+      expect(eventsOf(warmEcho).at(-1)).toMatchObject({ type: EventType.RUN_FINISHED })
+      await binding.dispose()
+      await new Promise(resolve => setTimeout(resolve, 300))
+      await first.ctx.fiber.dispose()
+      contexts.splice(contexts.indexOf(first.ctx), 1)
+      expect(await readSessionLog(first.root)).toContain(accepted.id)
+
+      const second = await mountDurable([textResponse('continued'), textResponse('continued again')], first.root)
+      const resumed = bindingFor(second.ctx, second.root)
+      await resumed.initialize()
+      const next = resumed.reserveRun(input('next', [accepted, { id: 'user-2', role: 'user', content: 'Next' }]), 'next')
+      resumed.drive(next)
+      await next.done
+      await resumed.liveAgent.whenIdle()
+      const snapshot = eventsOf(next).find(event => event.type === EventType.MESSAGES_SNAPSHOT)
+      const expected = { id: accepted.id, encryptedValue: accepted.encryptedValue, subagentRunId: accepted.subagentRunId, role: 'tool', toolCallId: accepted.toolCallId, content: accepted.content,
+        ...(metadata === undefined ? {} : { metadata: 'a2ui' in metadata ? { a2ui: metadata.a2ui } : {} }) }
+      expect(snapshot).toMatchObject({ messages: expect.arrayContaining([expected]) })
+      if (snapshot?.type !== EventType.MESSAGES_SNAPSHOT) throw new Error('missing snapshot')
+      expect(snapshot.messages.filter(message => message.role === 'tool')).toEqual([expected])
+      expect(JSON.stringify(eventsOf(next))).not.toContain('@dsh-ag-ui/frontend-result-id')
+      const repeated = resumed.reserveRun(input('repeated', [...snapshot.messages, { id: 'user-3', role: 'user', content: 'Again' }]), 'repeated')
+      resumed.drive(repeated)
+      await repeated.done
+      await resumed.liveAgent.whenIdle()
+      expect(eventsOf(repeated).at(-1)).toMatchObject({ type: EventType.RUN_FINISHED })
+      expect(resumed.liveAgent.session.snapshotEvents().filter(event => event.type === 'tool/result')).toHaveLength(1)
+      for (const changed of [{ content: 'changed' }, { encryptedValue: 'changed' }, { subagentRunId: 'changed' }, { metadata: { changed: true } }]) {
+        const runId = `conflict-${Object.keys(changed)[0]}`
+        const conflict = resumed.reserveRun(input(runId, [{ ...accepted, ...changed }]), runId)
+        resumed.drive(conflict)
+        await conflict.done
+        expect(eventsOf(conflict).at(-1)).toMatchObject({ type: EventType.RUN_ERROR, code: 'MESSAGE_ID_CONFLICT' })
+      }
+
+    },
+  )
+
   it('resumes the persisted session, deduplicates resent history, and keeps identities off disk', async () => {
     const first = await mountDurable([textResponse('The codeword is pine-cone-7.')])
     const binding = bindingFor(first.ctx, first.root)

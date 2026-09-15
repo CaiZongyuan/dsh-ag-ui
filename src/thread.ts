@@ -35,6 +35,7 @@ import { isJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import { isDeepStrictEqual } from 'node:util'
 import type { FileUploads, FileUploadReceiptId, FileUploadValue } from '@deepseek-ai/dsh-client-file-upload'
 import { signedFileUrl, verifiedFileUrl } from './files.ts'
+import { frontendResultDigest, frontendResultMeta } from './frontend-result.ts'
 import { AgUiGatewayError } from './errors.ts'
 import { jsonBytes, valueDigest } from './json.ts'
 import { consumedMessages, durableUserId, SessionProjection, STATE_TOOL_NAME } from './projection.ts'
@@ -555,12 +556,12 @@ export class ThreadBinding {
         if (pending === undefined) {
           throw new AgUiGatewayError('UNKNOWN_TOOL_RESULT', 'The frontend Tool result has no pending call.', 409)
         }
-        this.acceptedMessages.set(message.id, { role: 'tool', digest: valueDigest(message) })
+        this.acceptedMessages.set(message.id, { role: 'tool', digest: frontendResultDigest(message) })
         this.projection.markAwaitingResult(message.toolCallId)
         if (message.error === undefined) {
           pending.resolve({
             content: message.content,
-            ...(message.metadata === undefined ? {} : { presentationMeta: structuredClone(message.metadata) }),
+            presentationMeta: frontendResultMeta(message),
           })
         }
         else pending.reject(new Error(`Frontend Tool failed: ${message.error}`))
@@ -888,7 +889,7 @@ export class ThreadBinding {
       if (message.role !== 'user' && message.role !== 'tool') continue
       if (ids.has(message.id)) throw new AgUiGatewayError('INVALID_MESSAGE_BATCH', 'Message ids must be unique within a run.')
       ids.add(message.id)
-      const digest = message.role === 'user' ? messageDigest(message.id, message.content) : valueDigest(message)
+      const digest = message.role === 'user' ? messageDigest(message.id, message.content) : frontendResultDigest(message)
       const accepted = this.acceptedMessages.get(message.id)
       if (accepted !== undefined) {
         if (accepted.role !== message.role || accepted.digest !== digest) {
@@ -925,7 +926,7 @@ export class ThreadBinding {
   private commitServerEchoes(echoes: readonly AgUiToolMessage[]): void {
     for (const echo of echoes) {
       this.projection.consumeServerResult(echo.toolCallId)
-      this.acceptedMessages.set(echo.id, { role: 'tool', digest: valueDigest(echo) })
+      this.acceptedMessages.set(echo.id, { role: 'tool', digest: frontendResultDigest(echo) })
     }
   }
 
