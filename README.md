@@ -106,6 +106,7 @@ A later Profile patch replaces the bundle row's complete `config`; include every
 | `path` | `/ag-ui` | Exact Host HTTP route |
 | `provider` | required | Registered DSH model provider route |
 | `model` | required | Model ID owned by the provider |
+| `workspaceRoot` | `<DSH_HOME>/workspaces` | Root for per-thread workspace directories, named by durable session id |
 | `agentPreset` | none | Deployment-default agent preset id composed into every thread |
 | `tenantPresets` | `{}` | Per-tenant preset ids taking precedence over `agentPreset` |
 | `sharedSecret` | required | Bearer secret shared only with the trusted BFF |
@@ -131,6 +132,8 @@ A later Profile patch replaces the bundle row's complete `config`; include every
 | `maxRunsPerThread` | `32` | Maximum retained run ledger entries and, separately, waiting requests per thread |
 
 `agentPreset` composes each thread's agent from the host's agent-presets roster (mount the roster plugin before this Gateway); an unresolvable id fails Gateway activation loudly, a per-tenant entry overrides the deployment default for that tenant's threads, and a resumed thread keeps the composition its own durable session recorded. Without `agentPreset`, threads keep the host composition unchanged.
+
+Each thread uses `<workspaceRoot>/<sessionId>` as its DSH working directory. The directory is named by the durable session id, so client thread ids stay off disk. When the Host provides `workspaceRegistry`, the Gateway registers new workspaces for DSH Web.
 
 `maxRunEvents` must retain at least the mandatory opening and terminal events. `maxRunEventBytes` bounds the complete retained Run record, including `RUN_STARTED` and its terminal event, and must be large enough for the configured maximum identity length. A non-loopback DSH WebServer requires `allowNonLoopback: true`. Prefer a loopback Gateway behind a same-host authenticated BFF.
 

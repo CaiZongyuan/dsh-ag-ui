@@ -172,7 +172,7 @@ describe('tool view cards over HTTP', () => {
 })
 
 describe('tool view cards survive a durable restart', () => {
-  const OPTIONS: ThreadOptions = {
+  const OPTIONS = {
     provider: 'scripted',
     model: 'scripted',
     frontendToolTimeoutMs: 10_000,
@@ -181,7 +181,7 @@ describe('tool view cards survive a durable restart', () => {
     maxRunEventBytes: 128 * 1024,
     maxRunsPerThread: 4,
     maxStateBytes: 64 * 1024,
-  }
+  } satisfies Omit<ThreadOptions, 'workspaceRoot'>
 
   it('re-derives the identical settled card in a resumed process', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ag-ui-view-'))
@@ -198,7 +198,8 @@ describe('tool view cards survive a durable restart', () => {
       textResponse('Durable probe done.'),
     ]))
     await first.plugin(JsonlSessionPersistence, { root, compression: 'none' })
-    const original = new ThreadBinding(first, principal, 'view-resume', sessionId, OPTIONS, () => {})
+    const options = { ...OPTIONS, workspaceRoot: join(root, 'workspaces') }
+    const original = new ThreadBinding(first, principal, 'view-resume', sessionId, options, () => {})
     await original.initialize()
     const runOne = original.reserveRun({
       threadId: 'view-resume',
@@ -224,7 +225,7 @@ describe('tool view cards survive a durable restart', () => {
     second.tools.register(VIEW_TOOL)
     second.llm.registerAdapter(['scripted'], new ScriptedAdapter([textResponse('Resumed answer.')]))
     await second.plugin(JsonlSessionPersistence, { root, compression: 'none' })
-    const resumed = new ThreadBinding(second, principal, 'view-resume', sessionId, OPTIONS, () => {})
+    const resumed = new ThreadBinding(second, principal, 'view-resume', sessionId, options, () => {})
     await resumed.initialize()
     const runTwo = resumed.reserveRun({
       threadId: 'view-resume',

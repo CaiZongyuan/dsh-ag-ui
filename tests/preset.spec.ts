@@ -51,11 +51,14 @@ async function mount(overrides: Partial<Config> = {}, script: StreamChunk[][] = 
   }
   const adapter = new ScriptedAdapter(script)
   ctx.llm.registerAdapter(['scripted'], adapter)
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'ag-ui-preset-workspaces-'))
+  roots.push(workspaceRoot)
   await ctx.plugin(AgUiGateway, {
     provider: 'scripted',
     model: 'scripted',
     sharedSecret: SECRET,
     agentPreset: 'alpha',
+    workspaceRoot,
     ...overrides,
   })
   return { url: `http://127.0.0.1:${String(ctx.webServer.port)}/ag-ui`, adapter }
@@ -159,6 +162,8 @@ describe('threads refuse a configured preset without a roster', () => {
     const ctx = new Context()
     contexts.push(ctx)
     await mountTestAgentCore(ctx)
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'ag-ui-preset-no-roster-'))
+    roots.push(workspaceRoot)
     const principal = { tenantId: 'tenant-1', userId: 'user-1' }
     const binding = new ThreadBinding(
       ctx,
@@ -168,6 +173,7 @@ describe('threads refuse a configured preset without a roster', () => {
       {
         provider: 'scripted',
         model: 'scripted',
+        workspaceRoot,
         presetId: 'alpha',
         frontendToolTimeoutMs: 10_000,
         threadIdleMs: 60_000,
@@ -203,9 +209,10 @@ describe('session preset resolution', () => {
 })
 
 describe('resumed threads keep their recorded composition', () => {
-  const OPTIONS = (presetId: string): ThreadOptions => ({
+  const OPTIONS = (presetId: string, workspaceRoot: string): ThreadOptions => ({
     provider: 'scripted',
     model: 'scripted',
+    workspaceRoot,
     presetId,
     frontendToolTimeoutMs: 10_000,
     threadIdleMs: 60_000,
@@ -229,7 +236,8 @@ describe('resumed threads keep their recorded composition', () => {
     await first.plugin(AgentPresets, { default: 'alpha', roots: [{ path: ROOT, trust: 'system' }], includeUserRoot: false })
     first.llm.registerAdapter(['scripted'], new ScriptedAdapter([textResponse('alpha turn done.')]))
     await first.plugin(JsonlSessionPersistence, { root, compression: 'none' })
-    const original = new ThreadBinding(first, principal, 'preset-resume', sessionId, OPTIONS('alpha'), () => {})
+    const workspaceRoot = join(root, 'workspaces')
+    const original = new ThreadBinding(first, principal, 'preset-resume', sessionId, OPTIONS('alpha', workspaceRoot), () => {})
     await original.initialize()
     expect(original.liveAgent.session.header.agentPreset).toBe('alpha')
     const firstRun = original.reserveRun({
@@ -260,7 +268,7 @@ describe('resumed threads keep their recorded composition', () => {
       textResponse('alpha still composes the resumed thread.'),
     ]))
     await second.plugin(JsonlSessionPersistence, { root, compression: 'none' })
-    const resumed = new ThreadBinding(second, principal, 'preset-resume', sessionId, OPTIONS('beta'), () => {})
+    const resumed = new ThreadBinding(second, principal, 'preset-resume', sessionId, OPTIONS('beta', workspaceRoot), () => {})
     await resumed.initialize()
     expect(sessionPresetOf(resumed.liveAgent.session)).toBe('alpha')
 

@@ -1,4 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { mkdir, realpath } from 'node:fs/promises'
+import { join } from 'node:path'
 import {
   EventType,
   type RunAgentInput,
@@ -42,6 +44,8 @@ const SCHEDULING_PROBE = {
 export interface ThreadOptions {
   readonly provider: string
   readonly model: string
+  /** Absolute root containing the deterministic thread workspace. */
+  readonly workspaceRoot: string
   /** Preset id composed into the thread's agents; absent keeps the host composition. */
   readonly presetId?: string
   readonly frontendToolTimeoutMs: number
@@ -85,6 +89,10 @@ interface PreparedFrontendTool {
 interface SharedStateBaseline {
   readonly active: boolean
   readonly value: unknown
+}
+
+interface WorkspaceRegistryLike {
+  create(path: string, title?: string): Promise<unknown>
 }
 
 /** One authenticated process-local AG-UI thread and its owned DSH Agent. */
@@ -144,19 +152,58 @@ export class ThreadBinding {
 
   private async restoreOrCreate(): Promise<AgentHandle> {
     const agentOptions = { provider: this.options.provider, model: this.options.model }
-    // the resolved preset is snapshotted into durable meta at creation, before any await
-    const meta = this.options.presetId === undefined ? {} : { meta: { agentPreset: this.options.presetId } }
-    const create = () => this.ctx.agents.create({ sessionId: this.sessionId, ...meta, agentOptions, setup: this.agentSetup() })
+    const create = () => this.create(agentOptions)
     if (this.ctx.get('sessionPersistence') === undefined) return create()
     try {
       const handle = await this.ctx.agents.resume({ resumeSessionId: this.sessionId, agentOptions, setup: this.agentSetup() })
-      this.recover(handle.agent.session.snapshotEvents())
-      return handle
+      try {
+        const recordedCwd = handle.agent.session.header.cwd
+        if (recordedCwd === undefined) {
+          this.ctx.logger.warn(`ag-ui: resumed legacy session ${String(this.sessionId)} without a workspace cwd`)
+        } else {
+          const cwd = await this.prepareWorkspace()
+          if (recordedCwd !== cwd) {
+            throw new AgUiGatewayError(
+              'SESSION_CWD_MISMATCH',
+              'The persisted session workspace does not match the configured thread workspace.',
+              409,
+            )
+          }
+        }
+        this.recover(handle.agent.session.snapshotEvents())
+        return handle
+      } catch (error) {
+        await handle.dispose()
+        throw error
+      }
     } catch (error) {
       // A missing log permits creation; corruption, format refusal, and setup failures do not.
       if (!(error instanceof SessionPersistenceNotFoundError)) throw error
       return create()
     }
+  }
+
+  private async create(agentOptions: { provider: string; model: string }): Promise<AgentHandle> {
+    const cwd = await this.prepareWorkspace()
+    const registry = workspaceRegistryOf(this.ctx)
+    if (registry !== undefined) await registry.create(cwd, String(this.sessionId))
+    const meta = {
+      cwd,
+      ...(this.options.presetId === undefined ? {} : { agentPreset: this.options.presetId }),
+    }
+    return this.ctx.agents.create({
+      sessionId: this.sessionId,
+      meta,
+      agentOptions,
+      setup: this.agentSetup(),
+    })
+  }
+
+  private async prepareWorkspace(): Promise<string> {
+    // named by the durable session id so the client thread id stays off disk
+    const directory = join(this.options.workspaceRoot, String(this.sessionId))
+    await mkdir(directory, { recursive: true })
+    return realpath(directory)
   }
 
   private agentSetup(): AgentSetup {
@@ -926,6 +973,11 @@ function isEmptyStateContainer(value: unknown): boolean {
 /** Digest one accepted user message in a fixed field order, stable across cold resume. */
 function messageDigest(clientId: string, content: AgUiUserMessage['content']): string {
   return valueDigest({ id: clientId, role: 'user', content })
+}
+
+/** Resolve the optional host workspace registry without requiring the package. */
+function workspaceRegistryOf(ctx: Context): WorkspaceRegistryLike | undefined {
+  return (ctx as Context & { get(name: string): unknown }).get('workspaceRegistry') as WorkspaceRegistryLike | undefined
 }
 
 /** Narrow a JSON object without accepting arrays or null. */

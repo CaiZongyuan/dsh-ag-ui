@@ -1,14 +1,19 @@
 import { request as httpRequest, type Server } from 'node:http'
+import { mkdtemp, realpath, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, relative } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RunAgentInput, Tool } from '@ag-ui/core'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { Context } from '@deepseek-ai/cordis'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { ScriptedAdapter, type ScriptedResponse, textResponse } from './scripted-adapter.ts'
 import { mountTestAgentCore } from './agent-core.ts'
-import AgUiGateway, { type Config } from 'dsh-ag-ui'
+import AgUiGateway, { Config as GatewayConfig, type Config } from 'dsh-ag-ui'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { ThreadBinding } from '../src/thread.ts'
+import { durableSessionId } from '../src/session-id.ts'
 
 const SECRET = 'test-only-ag-ui-shared-secret'
 const HEADERS = {
@@ -17,26 +22,38 @@ const HEADERS = {
   'x-dsh-user-id': 'user-1',
 }
 
+const PRINCIPAL = { tenantId: 'tenant-1', userId: 'user-1' }
 const contexts: Context[] = []
+const workspaceRoots: string[] = []
+
+function workspaceName(threadId: string): string {
+  return String(durableSessionId(PRINCIPAL, threadId, SECRET))
+}
 
 afterEach(async () => {
   for (const ctx of contexts.splice(0).reverse()) await ctx.fiber.dispose()
+  await Promise.all(workspaceRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
 async function mount(
   overrides: Partial<Config> = {},
   script: ScriptedResponse[] = [textResponse('ok')],
   host: '127.0.0.1' | '0.0.0.0' = '127.0.0.1',
+  workspaceRegistry?: { create(path: string, title?: string): Promise<unknown> },
 ) {
   const ctx = new Context()
   contexts.push(ctx)
   await ctx.plugin(WebServer, { host, port: 0 })
   await mountTestAgentCore(ctx)
+  if (workspaceRegistry !== undefined) ctx.provide('workspaceRegistry', workspaceRegistry)
   ctx.llm.registerAdapter(['scripted'], new ScriptedAdapter(script))
+  const workspaceRoot = overrides.workspaceRoot ?? await mkdtemp(join(tmpdir(), 'ag-ui-http-workspaces-'))
+  if (overrides.workspaceRoot === undefined) workspaceRoots.push(workspaceRoot)
   const gateway = await ctx.plugin(AgUiGateway, {
     provider: 'scripted',
     model: 'scripted',
     sharedSecret: SECRET,
+    workspaceRoot,
     maxRunEvents: 128,
     maxRunEventBytes: 128 * 1024,
     frontendToolTimeoutMs: 10_000,
@@ -131,6 +148,7 @@ describe('AG-UI configuration', () => {
     [{ tenantHeader: 'X-Tenant' }, 'identity header names'],
     [{ userHeader: 'bad_header' }, 'identity header names'],
     [{ sharedSecret: 'short' }, 'at least 16 UTF-8 bytes'],
+    [{ workspaceRoot: '' }, 'workspaceRoot must not be empty'],
     [{ maxThreads: 0 }, 'maxThreads must be positive'],
     [{ threadIdleMs: 0 }, 'threadIdleMs must be positive'],
     [{ maxRunEvents: 1 }, 'maxRunEvents must retain opening and terminal events'],
@@ -143,6 +161,43 @@ describe('AG-UI configuration', () => {
     await expect(mount({}, [textResponse('unused')], '0.0.0.0')).rejects.toThrow('non-loopback WebServer bind')
     const allowed = await mount({ allowNonLoopback: true }, [textResponse('ok')], '0.0.0.0')
     expect(allowed.ctx.webServer.host).toBe('0.0.0.0')
+  })
+
+  it('defaults workspaceRoot under DSH home and expands relative and home paths', async () => {
+    const parsed = GatewayConfig({ provider: 'scripted', model: 'scripted', sharedSecret: SECRET })
+    expect(parsed.workspaceRoot).toBe(dshHomePath('workspaces'))
+
+    const root = await mkdtemp(join(tmpdir(), 'ag-ui-config-paths-'))
+    workspaceRoots.push(root)
+    const relativeRoot = join(root, 'relative')
+    const relativeMount = await mount({ workspaceRoot: relative(process.cwd(), relativeRoot) })
+    expect((await post(relativeMount.url, input())).status).toBe(200)
+    expect(relativeMount.ctx.agents.list()[0]?.session.header.cwd)
+      .toBe(await realpath(join(relativeRoot, workspaceName('thread-1'))))
+
+    const priorHome = process.env.HOME
+    process.env.HOME = root
+    try {
+      const homeMount = await mount({ workspaceRoot: '~/home-path' })
+      expect((await post(homeMount.url, input({ threadId: 'thread-home', runId: 'run-home' }))).status).toBe(200)
+      expect(homeMount.ctx.agents.list()[0]?.session.header.cwd)
+        .toBe(await realpath(join(root, 'home-path', workspaceName('thread-home'))))
+    } finally {
+      if (priorHome === undefined) delete process.env.HOME
+      else process.env.HOME = priorHome
+    }
+  })
+
+  it('registers a fresh workspace when the optional host service is present', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ag-ui-registry-workspaces-'))
+    workspaceRoots.push(root)
+    const create = vi.fn(async () => ({}))
+    const mounted = await mount({ workspaceRoot: root }, [textResponse('ok')], '127.0.0.1', { create })
+    expect((await post(mounted.url, input())).status).toBe(200)
+    const cwd = await realpath(join(root, workspaceName('thread-1')))
+    expect(create).toHaveBeenCalledOnce()
+    expect(create).toHaveBeenCalledWith(cwd, workspaceName('thread-1'))
+    expect(cwd).not.toContain('thread-1')
   })
 })
 
@@ -253,6 +308,18 @@ describe('AG-UI gateway lifecycle', () => {
     // the queued run opened after the first reply was durable, so its snapshot already carries it
     expect(results[1].body).toContain('first-reply')
     expect(results[1].body).toContain('second-reply')
+    expect(ctx.agents.list()).toHaveLength(1)
+  })
+
+  it('shares one pending thread creation across concurrent requests', async () => {
+    const { ctx, url } = await mount({}, [textResponse('one')])
+    const first = post(url, input())
+    const second = post(url, input())
+    const results = await Promise.all([first, second])
+    expect(results[0]?.status).toBe(200)
+    // A duplicate arriving before completion reports RUN_IN_PROGRESS on the base Gateway.
+    expect([200, 409]).toContain(results[1]?.status)
+    expect((await post(url, input())).body).toBe(results[0]?.body)
     expect(ctx.agents.list()).toHaveLength(1)
   })
 

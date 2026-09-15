@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - Durable native projection of frontend Tool-result metadata through DSH presentation metadata.
+- Deterministic per-thread workspaces with DSH Web workspace registration when the Host provides it.
 - Bidirectional shared state with `STATE_SNAPSHOT` and the reserved `ag_ui_update_state` Tool.
 - Dojo-compatible keyless examples for chat, backend Tools, shared state, HITL, and tool-based generative UI.
 

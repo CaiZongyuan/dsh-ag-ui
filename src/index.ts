@@ -5,10 +5,12 @@
 
 import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { resolve } from 'node:path'
 import { EventType, RunAgentInputSchema, type RunAgentInput } from '@ag-ui/core'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { dshHomePath, expandHomePath } from '@deepseek-ai/dsh-home-paths'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-tools'
 import { AgUiGatewayError, publicError } from './errors.ts'
@@ -35,6 +37,8 @@ export interface Config {
   provider: string
   /** Model id for Gateway-created Agents. */
   model: string
+  /** Root directory containing one workspace per thread. */
+  workspaceRoot?: string
   /** Deployment-default preset id composed into every thread without a tenant override. */
   agentPreset?: string
   /** Per-tenant preset ids taking precedence over {@link Config.agentPreset}. */
@@ -88,6 +92,7 @@ export const Config: z<Config> = z.object({
   path: z.string().default('/ag-ui'),
   provider: z.string().required(),
   model: z.string().required(),
+  workspaceRoot: z.string().default(dshHomePath('workspaces')),
   agentPreset: z.string(),
   tenantPresets: z.dict(z.string()),
   sharedSecret: z.string().required(),
@@ -140,7 +145,10 @@ export class AgUiGateway extends Service implements AgUiAgentLookup {
    */
   constructor(ctx: Context, config: Config) {
     super(ctx, 'agUi')
-    this.resolved = config as Required<Config>
+    this.resolved = {
+      ...config,
+      workspaceRoot: resolveWorkspaceRoot(config.workspaceRoot as string),
+    } as Required<Config>
     assertConfig(ctx, this.resolved)
     ctx.effect(() => {
       const unregister = ctx.webServer.register({
@@ -283,6 +291,7 @@ export class AgUiGateway extends Service implements AgUiAgentLookup {
     const options: ThreadOptions = {
       provider: this.resolved.provider,
       model: this.resolved.model,
+      workspaceRoot: this.resolved.workspaceRoot,
       ...(presetId === undefined ? {} : { presetId }),
       frontendToolTimeoutMs: this.resolved.frontendToolTimeoutMs,
       threadIdleMs: this.resolved.threadIdleMs,
@@ -337,6 +346,12 @@ export class AgUiGateway extends Service implements AgUiAgentLookup {
     }
     await Promise.allSettled(bindings.map(binding => binding.dispose()))
   }
+}
+
+/** Expand and absolutize the configured workspace root. */
+function resolveWorkspaceRoot(value: string): string {
+  if (value.trim() === '') throw new Error('ag-ui: workspaceRoot must not be empty')
+  return resolve(expandHomePath(value))
 }
 
 /** Reject invalid configuration before registering the HTTP route. */
