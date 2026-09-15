@@ -446,9 +446,9 @@ Backend Tool result 会发出 `TOOL_CALL_RESULT`。Frontend Tool result 不在 A
 | AG-UI core/client/encoder | `>=0.0.59 <0.1.0`（`~0.0.59`；已用 `0.0.59` 验证） |
 | `dsh-ag-ui/client` companion | `@ag-ui/client ~0.0.59` |
 | Node.js | `^22.19.0` 或 `>=24.0.0` |
-| DeepSeek Harness | `0.1.5-alpha.2`（精确的 developer-preview peers） |
+| DeepSeek Harness | `0.1.5-rc.2`（精确的 developer-preview peers） |
 
-DSH `0.1.5-alpha.2` 使用 v3 会话日志。实时文本通过 `agent/assistant-stream` 接收，已结算历史通过 `snapshotEvents()` 读取。配置 JSONL 持久化插件后，DSH 在恢复时迁移旧日志（已用 `0.1.1-rc.2` 录制验证）。图片和文件 Tool 结果分别投影为 `[image result]` 和 `[file result]` 占位符，不传输附件字节。
+DSH `0.1.5-rc.2` 使用 v3 会话日志。实时文本通过 `agent/assistant-stream` 接收，已结算历史通过 `snapshotEvents()` 读取。配置 JSONL 持久化插件后，DSH 在恢复时迁移旧日志（已用 `0.1.1-rc.2` 录制验证）。图片和文件 Tool 结果分别投影为 `[image result]` 和 `[file result]` 占位符，不传输附件字节。
 
 DSH 仍处于 developer preview，可能引入 breaking changes。在这些 API 稳定前，本 package 使用精确 DSH peer versions。
 
