@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { HttpAgent } from '@ag-ui/client'
 import { EventType, type BaseEvent, type RunAgentInput, type Tool } from '@ag-ui/core'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
+import { DshHttpAgent } from '../src/client.ts'
 import { disposeMountedContexts, mountGateway, runAgentEvents } from './harness.ts'
 import { textResponse, toolCallsResponse, toolResponse } from './scripted-adapter.ts'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
@@ -133,7 +134,7 @@ describe('AG-UI Gateway', () => {
       }),
       textResponse('Draft updated. Please review it before submitting.'),
     ])
-    const agent = new HttpAgent({ url: harness.url, headers: HEADERS, threadId: 'encounter-e001' })
+    const agent = new DshHttpAgent({ url: harness.url, headers: HEADERS, threadId: 'encounter-e001' })
     agent.addMessage({ id: 'user-1', role: 'user', content: 'Write the assessment here.' })
 
     const firstEvents: BaseEvent[] = []

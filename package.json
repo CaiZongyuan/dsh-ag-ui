@@ -29,6 +29,10 @@
       "types": "./lib/types/browser-tools.d.ts",
       "default": "./lib/browser-tools.js"
     },
+    "./client": {
+      "types": "./lib/types/client.d.ts",
+      "default": "./lib/client.js"
+    },
     "./invariant": {
       "types": "./lib/types/invariant.d.ts",
       "default": "./lib/invariant.js"
@@ -41,6 +45,8 @@
     "lib/index.js.map",
     "lib/browser-tools.js",
     "lib/browser-tools.js.map",
+    "lib/client.js",
+    "lib/client.js.map",
     "lib/invariant.js",
     "lib/invariant.js.map",
     "lib/types/**/*.d.ts",
@@ -91,6 +97,7 @@
     "@deepseek-ai/schemastery": "3.18.2"
   },
   "peerDependencies": {
+    "@ag-ui/client": "~0.0.59",
     "@deepseek-ai/cordis": "4.0.2",
     "@deepseek-ai/dsh-agent": "0.1.5-alpha.1",
     "@deepseek-ai/dsh-home-paths": "0.1.5-alpha.1",
@@ -101,6 +108,11 @@
     "@deepseek-ai/dsh-session-persistence": "0.1.5-alpha.1",
     "@deepseek-ai/dsh-tools": "0.1.5-alpha.1",
     "@deepseek-ai/dsh-util-values": "0.1.5-alpha.1"
+  },
+  "peerDependenciesMeta": {
+    "@ag-ui/client": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@ag-ui/client": "~0.0.59",
