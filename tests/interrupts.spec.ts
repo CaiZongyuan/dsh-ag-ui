@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Approval from '@deepseek-ai/dsh-user-approval'
@@ -12,7 +15,8 @@ import { mountTestAgentCore } from './agent-core.ts'
 import { ScriptedAdapter, textResponse, toolCallsResponse } from './scripted-adapter.ts'
 
 const contexts: Context[] = []
-afterEach(async () => { for (const ctx of contexts.splice(0)) await ctx.fiber.dispose() })
+const workspaceRoots: string[] = []
+afterEach(async () => { for (const ctx of contexts.splice(0)) await ctx.fiber.dispose(); for (const root of workspaceRoots.splice(0)) await rm(root, { recursive: true, force: true }) })
 const frontend = { name: 'ui_action', description: 'A frontend action.', parameters: { type: 'object', properties: {} } }
 function input(runId: string, extra: Partial<RunAgentInput> = {}): RunAgentInput {
   return { threadId: 'human', runId, messages: [], tools: [frontend], context: [], state: {}, forwardedProps: {}, ...extra }
@@ -31,7 +35,10 @@ async function mount(calls = [{ callId: 'approval-call', name: 'effect', args: {
   const unguard = ctx.on('tools/pre-execute', (exec, next) => exec.name === 'effect' ? Promise.resolve({ kind: 'ask', reason: 'Allow the effect?' }) : next())
   const adapter = new ScriptedAdapter([toolCallsResponse(calls), textResponse('finished')])
   ctx.llm.registerAdapter(['scripted'], adapter)
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'ag-ui-interrupt-workspaces-'))
+  workspaceRoots.push(workspaceRoot)
   const binding = new ThreadBinding(ctx, { tenantId: 't', userId: 'u' }, 'human', SessionId('human-session'), {
+    workspaceRoot, maxFilesPerMessage: 8,
     provider: 'scripted', model: 'scripted', frontendToolTimeoutMs: 10000, threadIdleMs: 60000,
     maxRunEvents: 128, maxRunEventBytes: 128 * 1024, maxRunsPerThread: 16, maxStateBytes: 65536, ...options,
   }, () => {})

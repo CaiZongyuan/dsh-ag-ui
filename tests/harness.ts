@@ -139,8 +139,8 @@ export async function mountGateway(
   for (const tool of options.tools ?? []) ctx.tools.register(tool)
   const adapter = new ScriptedAdapter(script)
   ctx.llm.registerAdapter(['scripted'], adapter)
-  const workspaceRoot = options.workspaceRoot ?? await mkdtemp(join(tmpdir(), 'ag-ui-workspaces-'))
-  if (options.workspaceRoot === undefined) workspaceRoots.push(workspaceRoot)
+  const workspaceRoot = options.workspaceRoot ?? (options.persistenceRoot === undefined ? await mkdtemp(join(tmpdir(), 'ag-ui-workspaces-')) : join(options.persistenceRoot, 'workspaces'))
+  if (options.workspaceRoot === undefined && options.persistenceRoot === undefined) workspaceRoots.push(workspaceRoot)
   const gateway = await ctx.plugin(AgUiGateway, {
     provider: 'scripted',
     model: 'scripted',

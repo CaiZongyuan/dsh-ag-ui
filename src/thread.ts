@@ -545,7 +545,7 @@ export class ThreadBinding {
       controller.turn = turn
       this.stagedTools = controller.input.tools
       this.injectContext(controller.input, baseline)
-      if (admission.action !== undefined) this.injectA2UIAction(admission.action)
+      if (admission.kind === 'tools' && admission.action !== undefined) this.injectA2UIAction(admission.action)
       this.commitSharedStateBaseline(baseline)
       this.commitServerEchoes(admission.echoes)
       resume?.apply()

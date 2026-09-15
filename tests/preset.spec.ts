@@ -348,7 +348,7 @@ describe('thread preset selection', () => {
     const { url, ctx } = await mount({ selectableAgentPresets: { 'tenant-1': ['beta'] } })
     const malformed = await post(url, 'malformed', 12)
     expect(malformed.status).toBe(400)
-    const invalid = await post(url, 'invalid', 'beta', [{ id: 'bad', role: 'user', content: [{ type: 'text', text: 'not supported' }] }])
+    const invalid = await post(url, 'invalid', 'beta', [{ id: 'bad', role: 'user', content: { invalid: true } }])
     expect(invalid.status).toBe(400)
     expect(sessionPresetOf(ctx.agents.list()[0]!.session)).toBe('alpha')
   })
@@ -439,7 +439,10 @@ describe('preset selection admission lifetime', () => {
 
   async function bindingFor(withRoster = true) {
     const { ctx } = await mount({ agentPreset: undefined }, [], withRoster)
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'ag-ui-select-workspaces-'))
+    roots.push(workspaceRoot)
     const binding = new ThreadBinding(ctx, PRINCIPAL, input.threadId, durableSessionId(PRINCIPAL, input.threadId, SECRET), {
+      workspaceRoot, maxFilesPerMessage: 8,
       provider: 'scripted', model: 'scripted', ...(withRoster ? { presetId: 'alpha' } : {}), selectablePresetIds: new Set(['beta']),
       frontendToolTimeoutMs: 10_000, threadIdleMs: 60_000, maxRunEvents: 128, maxRunEventBytes: 128 * 1024,
       maxRunsPerThread: 4, maxStateBytes: 64 * 1024,

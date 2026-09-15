@@ -3,9 +3,6 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, realpath, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join, relative } from 'node:path'
 import { RunFinishedEventSchema, type RunAgentInput, type Tool } from '@ag-ui/core'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { Context } from '@deepseek-ai/cordis'
@@ -19,7 +16,6 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { ThreadBinding } from '../src/thread.ts'
 import { durableSessionId } from '../src/session-id.ts'
 
-import { durableSessionId } from '../src/session-id.ts'
 
 const SECRET = 'test-only-ag-ui-shared-secret'
 const HEADERS = {
