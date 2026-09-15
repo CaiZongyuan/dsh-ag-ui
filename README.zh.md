@@ -502,7 +502,7 @@ Tool set 不变时保留 Tool-schema prefix。添加、删除或修改 Tool 可�
 - Host 重启后通过 `agents.resume()` 恢复已保存的会话。不会恢复挂起的 browser Tool：被中断的回合返回 `THREAD_INTERRUPTED`，shared state 需要新的 client baseline。
 - Assistant messages 和 Tool results 投影为文本；文件交付物使用单独的 activity。
 - 不支持 partial SSE reconnect。
-- `STATE_DELTA` and reasoning events are not adapted yet.
+- 尚未适配 `STATE_DELTA` 和 reasoning events。
 - Shared-state update 使用 top-level shallow merge，不提供 version、deep merge 或 conflict resolution。
 
 人工交互仅支持 root Agent；重启不恢复等待中的人工 Promise，使用现有 `THREAD_INTERRUPTED` 恢复流程。History-only run 可重新读取问题，但不支持部分 SSE 重连。如果 embedding adapter 启用 `idleShutdownMs`，其独立的子进程关闭策略可能中断人工等待；需要继续同一 live turn 时应保持 auto-shutdown 关闭。

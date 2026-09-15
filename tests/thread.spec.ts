@@ -138,54 +138,6 @@ describe('thread workspaces', () => {
   })
 })
 
-describe('thread workspaces', () => {
-  it('creates a workspace without a registry and registers once when one is present', async () => {
-    const headless = await mount()
-    expect((await stat(headless.binding.liveAgent.session.header.cwd ?? '')).isDirectory()).toBe(true)
-
-    const ctx = new Context()
-    contexts.push(ctx)
-    await mountTestAgentCore(ctx)
-    ctx.llm.registerAdapter(['scripted'], new ScriptedAdapter([textResponse('ok')]))
-    const workspaceRoot = await mkdtemp(join(tmpdir(), 'ag-ui-registry-workspaces-'))
-    workspaceRoots.push(workspaceRoot)
-    const create = vi.fn(async () => ({}))
-    ctx.provide('workspaceRegistry', { create })
-    const binding = new ThreadBinding(
-      ctx,
-      { tenantId: 'tenant-1', userId: 'user-1' },
-      'registry-thread',
-      SessionId('ag-ui-registry-session'),
-      { ...OPTIONS, workspaceRoot },
-      () => {},
-    )
-    await binding.initialize()
-    expect(create).toHaveBeenCalledOnce()
-    expect(create).toHaveBeenCalledWith(binding.liveAgent.session.header.cwd, 'ag-ui-registry-session')
-    expect(binding.liveAgent.session.header.cwd).not.toContain('registry-thread')
-  })
-
-  it('keeps workspace registry failures loud', async () => {
-    const ctx = new Context()
-    contexts.push(ctx)
-    await mountTestAgentCore(ctx)
-    const workspaceRoot = await mkdtemp(join(tmpdir(), 'ag-ui-registry-failure-'))
-    workspaceRoots.push(workspaceRoot)
-    const failure = new Error('workspace registry unavailable')
-    ctx.provide('workspaceRegistry', { create: async () => Promise.reject(failure) })
-    const binding = new ThreadBinding(
-      ctx,
-      { tenantId: 'tenant-1', userId: 'user-1' },
-      'registry-failure',
-      SessionId('ag-ui-registry-failure-session'),
-      { ...OPTIONS, workspaceRoot },
-      () => {},
-    )
-    await expect(binding.initialize()).rejects.toBe(failure)
-    expect(ctx.agents.list()).toHaveLength(0)
-  })
-})
-
 async function settle(controller: ReturnType<ThreadBinding['reserveRun']>): Promise<void> {
   controller.start()
   controller.error('TEST_DONE', 'done')

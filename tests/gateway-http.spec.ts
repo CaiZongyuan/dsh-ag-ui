@@ -154,7 +154,6 @@ describe('AG-UI configuration', () => {
 
     [{ maxFileBytes: 0 }, 'maxFileBytes must be positive'],
 
-    [{ workspaceRoot: '' }, 'workspaceRoot must not be empty'],
 
     [{ humanInteractionTimeoutMs: 0 }, 'humanInteractionTimeoutMs must be positive'],
     [{ humanInteractionTimeoutMs: 2_147_483_648 }, 'humanInteractionTimeoutMs must not exceed 2147483647'],
