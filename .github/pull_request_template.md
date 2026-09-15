@@ -8,8 +8,8 @@
 
 ## Verification
 
-- [ ] `pnpm check`
-- [ ] `pnpm pack --dry-run`
+- [ ] `pnpm -r --workspace-concurrency=1 --include-workspace-root check`
+- [ ] `pnpm -r --workspace-concurrency=1 --include-workspace-root pack --dry-run`
 
 Commands run:
 

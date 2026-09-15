@@ -123,7 +123,7 @@ The timeout variables must be positive integers in canonical form (`1500`, not `
 
 | Component | Supported version |
 | --- | --- |
-| AG-UI client | `>=0.0.58 <0.1.0` (`~0.0.58`; tested with `0.0.58`) |
+| AG-UI client | `>=0.0.59 <0.1.0` (`~0.0.59`; tested with `0.0.59`) |
 | Node.js | `^22.19.0 || >=24.0.0` |
 | DeepSeek Harness | `0.1.5-rc.2` (exact developer-preview peers) |
 

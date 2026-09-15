@@ -173,7 +173,6 @@ User message 接受有序的 text 和带签名的 thread-file URL parts。图片
 
 选择是可选的。省略该字段会保留当前组合；重复当前生效的规范 id 不做任何更改，重启后也一样。不同且未授权的 id 返回 HTTP 403 `PRESET_NOT_ALLOWED`；首个 turn 开始后请求切换到已授权的其他 id 返回 HTTP 409 `PRESET_LOCKED`。仅同步历史的请求不会选择 preset，因此由历史读取创建的 session 仍可在首个工作 run 中选择。原生 session 日志记录实际组合，并在重启后恢复。Gateway 在 SSE 开始前根据所选组合验证 Tool 名称。若选择成功后该验证拒绝 run 或客户端断开，已记录的选择会保留；用户 turn 不会启动，空白 session 仍可再次选择。
 
-
 `maxRunEvents` 必须至少容纳 mandatory opening 与 terminal events。`maxRunEventBytes` 会限制包含 `RUN_STARTED` 和 terminal event 在内的完整 retained Run record，并且必须足以容纳已配置的最大 identity length。非 loopback DSH WebServer 需要设置 `allowNonLoopback: true`。推荐把 Gateway 保持在 loopback，并放在同 Host 的 authenticated BFF 后面。
 
 开始和结束时的持久化历史快照都会计入该上限。事件缓冲区溢出会结束 HTTP run，并且只取消该 run 当前已领取的原生 turn。只读历史请求溢出不会取消其他活跃 turn。已完成的重复请求仍精确重放所保留的 events。
@@ -325,7 +324,6 @@ Synthetic result message ID 在原生 inbox 与持久化日志中标识该 actio
 History-only run 重复相同的已发布 interrupt id 和 shared-state snapshot。后到的原生问题等待下次已接纳 continuation，reload 不扩展另一个标签页已有的表单。如果原生问题出现在 frontend Tool 的 HTTP run 结束之后，下次 continuation 或 history read 会发布它。
 
 每个请求有独立且有限的服务器期限，reconnect 不延长期限。超时、原生 abort、overflow 或 dispose 会取消等待中的工作。对已知过期请求提交 resolved 会得到 `INTERRUPT_UNAVAILABLE`；提交 `status: "cancelled"` 可清除客户端旧 gate，且不会执行任何操作。当前客户端也拒绝取消已过期 interrupt，因此暂不发送 `expiresAt`。
-
 
 ## Shared state
 
@@ -514,10 +512,10 @@ git clone https://github.com/CaiZongyuan/dsh-ag-ui.git
 cd dsh-ag-ui
 corepack enable
 pnpm install
-pnpm -r --workspace-root check
+pnpm -r --workspace-concurrency=1 --include-workspace-root check
 ```
 
-本仓库是 pnpm workspace：根 package 即 Gateway，`packages/` 下是 `dsh-ag-ui-cards` React card 渲染包与 `dsh-ag-ui-adapter` 嵌入适配包。`pnpm -r --workspace-root check` 会在每个 workspace project 内运行 lint、strict TypeScript、per-file coverage、runtime/type builds 和 publint。Dojo fixture 仅用于 source checkout，不包含在 npm tarball 中。
+本仓库是 pnpm workspace：根 package 即 Gateway，`packages/` 下是 `dsh-ag-ui-cards` React card 渲染包与 `dsh-ag-ui-adapter` 嵌入适配包。`pnpm -r --workspace-concurrency=1 --include-workspace-root check` 会在每个 workspace project 内运行 lint、strict TypeScript、per-file coverage、runtime/type builds 和 publint。Dojo fixture 仅用于 source checkout，不包含在 npm tarball 中。
 
 贡献和发布要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 

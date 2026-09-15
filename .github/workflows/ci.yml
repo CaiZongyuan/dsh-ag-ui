@@ -27,5 +27,5 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm -r --workspace-root check
-      - run: pnpm -r --workspace-root pack --dry-run
+      - run: pnpm -r --workspace-concurrency=1 --include-workspace-root check
+      - run: pnpm -r --workspace-concurrency=1 --include-workspace-root pack --dry-run

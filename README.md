@@ -181,7 +181,6 @@ For multiple presets within one tenant, the host can grant selection with `selec
 
 Selection is optional. Omitting it preserves the current composition; repeating the effective canonical id is a no-op, including after restart. A different ungranted id fails with HTTP 403 `PRESET_NOT_ALLOWED`; a granted change after the first turn fails with HTTP 409 `PRESET_LOCKED`. A history-only request never selects a preset, so a session created by a history read can still choose one on its first work run. The native session log owns the selected composition and restores it after restart. Tool names are validated against the selected composition before SSE starts. A successful selection remains recorded if that validation rejects the run or its client disconnects; no user turn is started, and the blank session can select again.
 
-
 `maxRunEvents` must retain at least the mandatory opening and terminal events. `maxRunEventBytes` bounds the complete retained Run record, including `RUN_STARTED` and its terminal event, and must be large enough for the configured maximum identity length. A non-loopback DSH WebServer requires `allowNonLoopback: true`. Prefer a loopback Gateway behind a same-host authenticated BFF.
 
 Opening and final durable history snapshots both count toward this bound. Buffer overflow ends the HTTP run and cancels only its currently claimed native turn. An overflowing history-only read does not cancel another active turn. Completed duplicate requests still replay the exact retained events.
@@ -333,7 +332,6 @@ Every published interrupt must appear once in a resume batch. Validation precede
 A history-only run repeats the same published interrupt ids and shared-state snapshot. Later native questions wait for the next accepted continuation; reload does not enlarge a form another tab already received. A newly discovered question may follow a frontend Tool's completed HTTP run; the next continuation or history read publishes it.
 
 Each request has a finite server deadline, unaffected by reconnect. Timeout, native abort, overflow or disposal cancels the waiting work. A known expired resolved response returns `INTERRUPT_UNAVAILABLE`; send `status: "cancelled"` to clear that stale client gate without executing anything. `expiresAt` is omitted because current clients also reject cancellation of expired interrupts.
-
 
 ## Shared state
 
@@ -519,10 +517,10 @@ git clone https://github.com/CaiZongyuan/dsh-ag-ui.git
 cd dsh-ag-ui
 corepack enable
 pnpm install
-pnpm -r --workspace-root check
+pnpm -r --workspace-concurrency=1 --include-workspace-root check
 ```
 
-The repository is a pnpm workspace: the root package is the Gateway, and `packages/` holds the `dsh-ag-ui-cards` React card renderers and the `dsh-ag-ui-adapter` embedding adapter. `pnpm -r --workspace-root check` runs lint, strict TypeScript checking, per-file coverage, runtime/type builds, and publint in every workspace project. The Dojo fixture is intentionally source-checkout-only and is not included in the npm tarball.
+The repository is a pnpm workspace: the root package is the Gateway, and `packages/` holds the `dsh-ag-ui-cards` React card renderers and the `dsh-ag-ui-adapter` embedding adapter. `pnpm -r --workspace-concurrency=1 --include-workspace-root check` runs lint, strict TypeScript checking, per-file coverage, runtime/type builds, and publint in every workspace project. The Dojo fixture is intentionally source-checkout-only and is not included in the npm tarball.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution and release requirements.
 
