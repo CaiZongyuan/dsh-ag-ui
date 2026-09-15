@@ -20,6 +20,7 @@ import type {
 import { createUserMessage, errorChain, freezeMessage, MessageId, ToolCallId, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
+import type {} from '@deepseek-ai/dsh-session-projection'
 import {
   assertObjectJsonSchema,
   validateJsonSchemaValue,
@@ -65,6 +66,8 @@ export interface ThreadOptions {
   readonly workspaceRoot: string
   /** Preset id composed into the thread's agents; absent keeps the host composition. */
   readonly presetId?: string
+  /** Server-granted canonical ids for this binding's authenticated tenant. */
+  readonly selectablePresetIds?: ReadonlySet<string>
   readonly frontendToolTimeoutMs: number
   readonly threadIdleMs: number
   readonly maxRunEvents: number
@@ -326,7 +329,13 @@ export class ThreadBinding {
     this.assertLive()
     const prior = this.getRun(input.runId, digest)
     if (prior !== undefined) return { replay: prior }
-    if (this.classifyMessages(input).kind === 'sync') return this.retainRun(input, digest)
+    if (this.classifyMessages(input).kind === 'sync') {
+      await this.preparePreset(input, true)
+      if (signal.aborted) throw disconnected
+      this.assertLive()
+      const replay = this.getRun(input.runId, digest)
+      return replay === undefined ? this.retainRun(input, digest) : { replay }
+    }
     if (this.waitingRuns >= this.options.maxRunsPerThread) {
       throw new AgUiGatewayError('RUN_QUEUE_FULL', 'The AG-UI thread run queue is full.', 429)
     }
@@ -354,13 +363,67 @@ export class ThreadBinding {
           await Promise.race([this.liveAgent.whenIdle(), left.promise])
         } else {
           const replay = this.getRun(input.runId, digest)
-          return replay === undefined ? this.reserveRun(input, digest) : { replay }
+          if (replay !== undefined) return { replay }
+          const controller = this.reserveRun(input, digest)
+          try {
+            await this.preparePreset(input, false)
+            if (signal.aborted) throw disconnected
+            this.assertLive()
+            // Native selection can replace the inherited Tool names while admission awaits.
+            this.assertStateToolAvailable(this.prepareSharedState(input))
+            this.prepareFrontendTools(input.tools)
+            return controller
+          } catch (error) {
+            // A rejected HTTP admission never becomes a replayable SSE run.
+            this.runLedger.delete(input.runId)
+            this.failRunAdmission(controller, error)
+            throw error
+          }
         }
       }
     } finally {
       signal.removeEventListener('abort', onAbort)
       this.waitingRuns--
       this.scheduleIdleExpiry()
+    }
+  }
+
+  /** Authorize a selector locally; native selection owns composition and its durable record. */
+  private async preparePreset(input: RunAgentInput, readOnly: boolean): Promise<void> {
+    const props: unknown = input.forwardedProps
+    if (typeof props !== 'object' || props === null || !('agentPreset' in props)) return
+    const requested = props.agentPreset
+    if (typeof requested !== 'string' || requested.length === 0) {
+      throw new AgUiGatewayError('INVALID_AGENT_PRESET', 'forwardedProps.agentPreset must be a non-empty preset id.')
+    }
+    if (requested === sessionPresetOf(this.liveAgent.session)) return
+    if (!this.options.selectablePresetIds?.has(requested)) {
+      throw new AgUiGatewayError('PRESET_NOT_ALLOWED', 'This tenant may not select the requested agent preset.', 403)
+    }
+    // Read the native boundary so history can report a mismatch without calling select.
+    const boundary = this.ctx.get('sessionProjections')?.stateOf(this.liveAgent.session, 'turnBoundary')
+    if (boundary !== undefined && (boundary.openTurnStartSeq !== null || boundary.lastTurn > 0)) {
+      throw new AgUiGatewayError('PRESET_LOCKED', 'The thread has started; choose a new thread to use another agent preset.', 409)
+    }
+    if (readOnly || this.classifyMessages(input).kind === 'sync') return
+    this.assertUserRunReady()
+    this.prepareSharedState(input)
+    const presets = agentPresetsOf(this.ctx)
+    if (presets === undefined) {
+      throw new AgUiGatewayError('PRESET_UNAVAILABLE', 'The agent-preset roster is unavailable.', 503)
+    }
+    try {
+      await presets.select(this.liveAgent, requested)
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'code' in error) {
+        if (error.code === 'agent-preset/locked') {
+          throw new AgUiGatewayError('PRESET_LOCKED', 'The thread has started; choose a new thread to use another agent preset.', 409, error)
+        }
+        if (error.code === 'agent-preset/not-found' || error.code === 'agent-preset/invalid') {
+          throw new AgUiGatewayError('PRESET_UNAVAILABLE', 'The requested agent preset cannot compose this thread.', 400, error)
+        }
+      }
+      throw error
     }
   }
 

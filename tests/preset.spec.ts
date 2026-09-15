@@ -2,9 +2,9 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { HttpAgent } from '@ag-ui/client'
-import { EventType } from '@ag-ui/core'
+import { EventType, type RunAgentInput } from '@ag-ui/core'
 import { Context } from '@deepseek-ai/cordis'
 import AgentPresets from '@deepseek-ai/dsh-agent-presets'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
@@ -35,11 +35,12 @@ const contexts: Context[] = []
 const roots: string[] = []
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   for (const ctx of contexts.splice(0).reverse()) await ctx.fiber.dispose()
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
-async function mount(overrides: Partial<Config> = {}, script: StreamChunk[][] = [textResponse('ok')], withRoster = true): Promise<{ url: string, adapter: ScriptedAdapter }> {
+async function mount(overrides: Partial<Config> = {}, script: StreamChunk[][] = [textResponse('ok')], withRoster = true): Promise<{ url: string, adapter: ScriptedAdapter, ctx: Context }> {
   const ctx = new Context()
   ctx.baseUrl = new URL('./fixtures/presets/roots/', import.meta.url).href
   contexts.push(ctx)
@@ -61,7 +62,7 @@ async function mount(overrides: Partial<Config> = {}, script: StreamChunk[][] = 
     workspaceRoot,
     ...overrides,
   })
-  return { url: `http://127.0.0.1:${String(ctx.webServer.port)}/ag-ui`, adapter }
+  return { url: `http://127.0.0.1:${String(ctx.webServer.port)}/ag-ui`, adapter, ctx }
 }
 
 function agentFor(url: string, tenantId: string, threadId: string): HttpAgent {
@@ -215,6 +216,7 @@ describe('resumed threads keep their recorded composition', () => {
     model: 'scripted',
     workspaceRoot,
     presetId,
+    selectablePresetIds: new Set(['beta']),
     frontendToolTimeoutMs: 10_000,
     threadIdleMs: 60_000,
     maxRunEvents: 128,
@@ -224,7 +226,7 @@ describe('resumed threads keep their recorded composition', () => {
     maxFilesPerMessage: 8,
   })
 
-  it('mounts the log-recorded preset even after the tenant override changed', async () => {
+  it('restores a native selected preset after restart even when the creation default differs', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ag-ui-preset-'))
     roots.push(root)
     const principal = { tenantId: 'tenant-1', userId: 'user-1' }
@@ -242,15 +244,16 @@ describe('resumed threads keep their recorded composition', () => {
     const original = new ThreadBinding(first, principal, 'preset-resume', sessionId, OPTIONS('alpha', workspaceRoot), () => {})
     await original.initialize()
     expect(original.liveAgent.session.header.agentPreset).toBe('alpha')
-    const firstRun = original.reserveRun({
+    const firstRun = await original.admit({
       threadId: 'preset-resume',
       runId: 'preset-resume-run-1',
       messages: [{ id: 'preset-resume-user-1', role: 'user', content: 'Run the first turn.' }],
       tools: [],
       context: [],
       state: {},
-      forwardedProps: {},
-    }, 'digest-preset-resume-1')
+      forwardedProps: { agentPreset: 'beta' },
+    }, 'digest-preset-resume-1', new AbortController().signal)
+    if ('replay' in firstRun) throw new Error('Expected a new run.')
     original.drive(firstRun)
     await firstRun.done
     await original.dispose()
@@ -258,7 +261,7 @@ describe('resumed threads keep their recorded composition', () => {
     await first.fiber.dispose()
     contexts.splice(contexts.indexOf(first), 1)
 
-    // the deployment now points this tenant at beta; the resumed session still composes alpha
+    // Creation and deployment defaults are alpha; the durable native selection restores beta.
     const second = new Context()
     second.baseUrl = new URL('./fixtures/presets/roots/', import.meta.url).href
     contexts.push(second)
@@ -266,13 +269,13 @@ describe('resumed threads keep their recorded composition', () => {
     await second.plugin(Loader)
     await second.plugin(AgentPresets, { default: 'alpha', roots: [{ path: ROOT, trust: 'system' }], includeUserRoot: false })
     second.llm.registerAdapter(['scripted'], new ScriptedAdapter([
-      toolCallsResponse([{ callId: 'resumed-call-1', name: 'preset_alpha_probe', args: { probe: 'resumed' } }]),
-      textResponse('alpha still composes the resumed thread.'),
+      toolCallsResponse([{ callId: 'resumed-call-1', name: 'preset_beta_probe', args: { probe: 'resumed' } }]),
+      textResponse('beta still composes the resumed thread.'),
     ]))
     await second.plugin(JsonlSessionPersistence, { root, compression: 'none' })
-    const resumed = new ThreadBinding(second, principal, 'preset-resume', sessionId, OPTIONS('beta', workspaceRoot), () => {})
+    const resumed = new ThreadBinding(second, principal, 'preset-resume', sessionId, OPTIONS('alpha', workspaceRoot), () => {})
     await resumed.initialize()
-    expect(sessionPresetOf(resumed.liveAgent.session)).toBe('alpha')
+    expect(sessionPresetOf(resumed.liveAgent.session)).toBe('beta')
 
     const run = resumed.reserveRun({
       threadId: 'preset-resume',
@@ -287,7 +290,206 @@ describe('resumed threads keep their recorded composition', () => {
     await run.done
     const events = run.record.events as Array<{ type: string, content?: unknown, toolCallId?: unknown }>
     const result = events.find(event => event.type === EventType.TOOL_CALL_RESULT)
-    expect(JSON.parse(String(result?.content))).toMatchObject({ preset: 'alpha', marker: 'alpha-tool-live' })
+    expect(JSON.parse(String(result?.content))).toMatchObject({ preset: 'beta', marker: 'beta-tool-live' })
     expect(events.at(-1)).toMatchObject({ type: EventType.RUN_FINISHED })
+  })
+})
+
+
+/** Requests cross the real HTTP/authentication boundary and native preset service. */
+describe('thread preset selection', () => {
+  async function post(url: string, runId: string, preset: unknown, messages: unknown[] = [{ id: runId, role: 'user', content: 'Hello.' }], tenantId = PRINCIPAL.tenantId) {
+    return fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${SECRET}`, 'content-type': 'application/json', 'x-dsh-tenant-id': tenantId, 'x-dsh-user-id': PRINCIPAL.userId },
+      body: JSON.stringify({ threadId: 'select-thread', runId, messages, tools: [], context: [], state: {}, forwardedProps: { agentPreset: preset } }),
+    })
+  }
+
+  it('selects a server-authorized preset through the native service before the first turn', async () => {
+    const { url, ctx } = await mount({ selectableAgentPresets: { 'tenant-1': ['alpha', 'beta'] } }, [textResponse('beta selected.')])
+    const history = await post(url, 'history', 'beta', [])
+    expect(history.status).toBe(200)
+    await history.text()
+    const native = ctx.agents.list()[0]!
+    expect(sessionPresetOf(native.session)).toBe('alpha')
+    const response = await post(url, 'first', 'beta')
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain('RUN_FINISHED')
+    expect(sessionPresetOf(native.session)).toBe('beta')
+    expect(ctx.tools.get('preset_beta_probe', native)).toBeDefined()
+    expect(ctx.tools.get('preset_alpha_probe', native)).toBeUndefined()
+    expect(native.session.snapshotEvents().filter(event => event.type === 'agent-preset/selected')).toHaveLength(1)
+  })
+
+  it('refuses an ungranted preset, including another tenant grant, without running a turn', async () => {
+    const { url, adapter } = await mount({ selectableAgentPresets: { 'tenant-2': ['beta'] } })
+    const response = await post(url, 'forbidden', 'beta')
+    expect(response.status).toBe(403)
+    expect(await response.json()).toMatchObject({ code: 'PRESET_NOT_ALLOWED' })
+    expect(adapter.requests).toHaveLength(0)
+    expect((await post(url, 'forbidden', 'beta')).status).toBe(403)
+  })
+
+  it('keeps the effective preset as a no-op but refuses a different one after the first turn', async () => {
+    const { url, ctx } = await mount({ selectableAgentPresets: { 'tenant-1': ['beta'] } }, [textResponse('one'), textResponse('two')])
+    expect(await (await post(url, 'first', 'alpha')).text()).toContain('RUN_FINISHED')
+    expect(await (await post(url, 'second', 'alpha')).text()).toContain('RUN_FINISHED')
+    const change = await post(url, 'change', 'beta')
+    expect(change.status).toBe(409)
+    expect(await change.json()).toMatchObject({ code: 'PRESET_LOCKED' })
+    const history = await post(url, 'history', 'beta', [])
+    expect(history.status).toBe(409)
+    expect(await history.json()).toMatchObject({ code: 'PRESET_LOCKED' })
+    expect(ctx.agents.list()[0]!.session.snapshotEvents().filter(event => event.type === 'agent-preset/selected')).toHaveLength(0)
+  })
+
+  it('rejects malformed selectors and invalid work before changing the composition', async () => {
+    const { url, ctx } = await mount({ selectableAgentPresets: { 'tenant-1': ['beta'] } })
+    const malformed = await post(url, 'malformed', 12)
+    expect(malformed.status).toBe(400)
+    const invalid = await post(url, 'invalid', 'beta', [{ id: 'bad', role: 'user', content: [{ type: 'text', text: 'not supported' }] }])
+    expect(invalid.status).toBe(400)
+    expect(sessionPresetOf(ctx.agents.list()[0]!.session)).toBe('alpha')
+  })
+
+  it('rejects a Tool collision in the selected preset before SSE and lets the same run retry', async () => {
+    const { url, ctx, adapter } = await mount({ selectableAgentPresets: { 'tenant-1': ['beta'] } })
+    const request: RunAgentInput = {
+      threadId: 'selected-collision', runId: 'retry', messages: [{ id: 'user', role: 'user', content: 'Hello.' }],
+      tools: [{ name: 'preset_beta_probe', description: 'Conflicting browser tool', parameters: { type: 'object', properties: {} } }],
+      context: [], state: {}, forwardedProps: { agentPreset: 'beta' },
+    }
+    const send = (value: RunAgentInput) => fetch(url, { method: 'POST', headers: {
+      authorization: `Bearer ${SECRET}`, 'x-dsh-tenant-id': 'tenant-1', 'x-dsh-user-id': 'user-1', 'content-type': 'application/json',
+    }, body: JSON.stringify(value) })
+    const rejected = await send(request)
+    expect(rejected.status).toBe(409)
+    expect(await rejected.json()).toMatchObject({ code: 'FRONTEND_TOOL_NAME_COLLISION' })
+    expect(sessionPresetOf(ctx.agents.list()[0]!.session)).toBe('beta')
+    expect(adapter.requests).toHaveLength(0)
+    const retry = await send({ ...request, tools: [] })
+    expect(retry.status).toBe(200)
+    expect(await retry.text()).toContain('RUN_FINISHED')
+    expect(adapter.requests).toHaveLength(1)
+  })
+
+  it('validates browser Tools against the selected composition instead of the previous preset', async () => {
+    const { url, ctx, adapter } = await mount({ selectableAgentPresets: { 'tenant-1': ['beta'] } })
+    const response = await fetch(url, { method: 'POST', headers: {
+      authorization: `Bearer ${SECRET}`, 'x-dsh-tenant-id': 'tenant-1', 'x-dsh-user-id': 'user-1', 'content-type': 'application/json',
+    }, body: JSON.stringify({
+      threadId: 'previous-collision', runId: 'first', messages: [{ id: 'user', role: 'user', content: 'Hello.' }],
+      tools: [{ name: 'preset_alpha_probe', description: 'Browser tool', parameters: { type: 'object', properties: {} } }],
+      context: [], state: {}, forwardedProps: { agentPreset: 'beta' },
+    }) })
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain('RUN_FINISHED')
+    expect(sessionPresetOf(ctx.agents.list()[0]!.session)).toBe('beta')
+    expect(adapter.requests).toHaveLength(1)
+  })
+
+  it('holds the admission reservation across native selection and refuses a competing change', async () => {
+    const { url, ctx } = await mount({ selectableAgentPresets: { 'tenant-1': ['alpha', 'beta'] } }, [textResponse('beta won.')])
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const select = ctx.agentPresets.select.bind(ctx.agentPresets)
+    vi.spyOn(ctx.agentPresets, 'select').mockImplementation(async (agent, id) => {
+      entered.resolve()
+      await release.promise
+      return select(agent, id)
+    })
+    const first = post(url, 'first', 'beta')
+    await entered.promise
+    const second = post(url, 'second', 'alpha')
+    const history = await post(url, 'history', 'beta', [])
+    expect(history.status).toBe(200)
+    await history.text()
+    expect(sessionPresetOf(ctx.agents.list()[0]!.session)).toBe('alpha')
+    release.resolve()
+    expect(await (await first).text()).toContain('RUN_FINISHED')
+    expect((await second).status).toBe(409)
+    expect(sessionPresetOf(ctx.agents.list()[0]!.session)).toBe('beta')
+  })
+
+  it.each(['agent-preset/locked', 'agent-preset/not-found', 'agent-preset/invalid', 'unexpected', 'plain-error'])('contains native selection failure %s before SSE and preserves the composition', async code => {
+    const { url, ctx } = await mount({ selectableAgentPresets: { 'tenant-1': ['beta'] } })
+    const error = code === 'plain-error' ? new Error('Internal details stay private.') : Object.assign(new Error('Internal details stay private.'), { code })
+    vi.spyOn(ctx.agentPresets, 'select').mockRejectedValueOnce(error)
+    const response = await post(url, 'first', 'beta')
+    expect(response.status).toBe(code === 'agent-preset/locked' ? 409 : ['unexpected', 'plain-error'].includes(code) ? 500 : 400)
+    expect(await response.text()).not.toContain(error.message)
+    expect(sessionPresetOf(ctx.agents.list()[0]!.session)).toBe('alpha')
+    // The failed reservation has no replay record and the same input can be admitted again.
+    expect(await (await post(url, 'first', 'beta')).text()).toContain('RUN_FINISHED')
+  })
+
+  it('validates selectable presets at activation', async () => {
+    await expect(mount({ selectableAgentPresets: { 'tenant-1': ['nope'] } })).rejects.toThrow(/nope/)
+    await expect(mount({ agentPreset: undefined, selectableAgentPresets: { 'tenant-1': ['beta'] } }, [], false)).rejects.toThrow(/no agent-presets roster/)
+  })
+})
+
+
+describe('preset selection admission lifetime', () => {
+  const input: RunAgentInput = {
+    threadId: 'select-lifetime', runId: 'first', messages: [{ id: 'user', role: 'user', content: 'Hello.' }],
+    tools: [], context: [], state: {}, forwardedProps: { agentPreset: 'beta' },
+  }
+
+  async function bindingFor(withRoster = true) {
+    const { ctx } = await mount({ agentPreset: undefined }, [], withRoster)
+    const binding = new ThreadBinding(ctx, PRINCIPAL, input.threadId, durableSessionId(PRINCIPAL, input.threadId, SECRET), {
+      provider: 'scripted', model: 'scripted', ...(withRoster ? { presetId: 'alpha' } : {}), selectablePresetIds: new Set(['beta']),
+      frontendToolTimeoutMs: 10_000, threadIdleMs: 60_000, maxRunEvents: 128, maxRunEventBytes: 128 * 1024,
+      maxRunsPerThread: 4, maxStateBytes: 64 * 1024,
+    }, () => {})
+    await binding.initialize()
+    return { ctx, binding }
+  }
+
+  it('rejects a vanished roster before accepting work', async () => {
+    const { binding } = await bindingFor(false)
+    await expect(binding.admit(input, 'digest', new AbortController().signal)).rejects.toMatchObject({ code: 'PRESET_UNAVAILABLE' })
+    expect(binding.getRun(input.runId)).toBeUndefined()
+    await binding.dispose()
+  })
+
+  it('does not retain a history run disconnected while its selector is being validated', async () => {
+    const { binding } = await bindingFor()
+    const abort = new AbortController()
+    const history = { ...input, messages: [] }
+    const admission = binding.admit(history, 'history-digest', abort.signal)
+    abort.abort()
+    await expect(admission).rejects.toMatchObject({ code: 'CLIENT_DISCONNECTED' })
+    expect(binding.getRun(history.runId)).toBeUndefined()
+    expect(sessionPresetOf(binding.liveAgent.session)).toBe('alpha')
+    await binding.dispose()
+  })
+
+  it.each(['abort', 'dispose'])('does not start a turn when %s occurs during selection', async action => {
+    const { ctx, binding } = await bindingFor()
+    const native = binding.liveAgent
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const select = ctx.agentPresets.select.bind(ctx.agentPresets)
+    vi.spyOn(ctx.agentPresets, 'select').mockImplementation(async (agent, id) => {
+      // Hold the response after native commit to test an abandoned successful selection.
+      const selected = await select(agent, id)
+      entered.resolve()
+      await release.promise
+      return selected
+    })
+    const abort = new AbortController()
+    const admission = binding.admit(input, 'digest', abort.signal)
+    await entered.promise
+    if (action === 'abort') abort.abort()
+    else await binding.dispose()
+    release.resolve()
+    await expect(admission).rejects.toMatchObject({ code: action === 'abort' ? 'CLIENT_DISCONNECTED' : 'AGENT_NOT_AVAILABLE' })
+    expect(binding.getRun(input.runId)).toBeUndefined()
+    expect(sessionPresetOf(native.session)).toBe('beta')
+    expect(native.session.snapshotEvents().some(event => event.type === 'turn/start')).toBe(false)
+    await binding.dispose()
   })
 })

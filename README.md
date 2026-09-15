@@ -110,6 +110,7 @@ A later Profile patch replaces the bundle row's complete `config`; include every
 | `workspaceRoot` | `<DSH_HOME>/workspaces` | Root for per-thread workspace directories, named by durable session id |
 | `agentPreset` | none | Deployment-default agent preset id composed into every thread |
 | `tenantPresets` | `{}` | Per-tenant preset ids taking precedence over `agentPreset` |
+| `selectableAgentPresets` | `{}` | Canonical preset ids each authenticated tenant may select for a blank thread |
 | `sharedSecret` | required | Bearer secret shared only with the trusted BFF |
 | `tenantHeader` | `x-dsh-tenant-id` | Trusted tenant identity header |
 | `userHeader` | `x-dsh-user-id` | Trusted user identity header |
@@ -143,6 +144,11 @@ File routes require the official `fileUploads` and `attachments` services, alrea
 Clients must preserve the returned URL query when changing a proxy prefix. The gateway signs the native file reference and receipt for the authenticated session. `GET` verifies the signature and principal/thread mapping before calling the official streamed reader. Same-name uploads keep their display name and receive distinct receipt URLs. Downloads remain authorized after cold resume; rotating the shared secret invalidates old URLs. Pre-native unsigned upload URLs require a fresh upload.
 
 User messages accept ordered text and signed thread-file URL parts. Images use official image admission; other files become native file content parts. Harness owns receipt binding, successful admission retirement, and rollback when queue delivery fails. Rejected admission can retry its still-staged receipt. A consumed, explicitly retired, or cold unsent receipt returns `FILE_NOT_STAGED` and requires re-upload; the gateway never restores expired authority. `MESSAGES_SNAPSHOT` preserves the exact accepted AG-UI parts. Shared-state and frontend Tool admission are revalidated after asynchronous file processing, before publishing those parts. Inline data parts are not accepted.
+
+For multiple presets within one tenant, the host can grant selection with `selectableAgentPresets: { "tenant-1": ["alpha", "beta"] }`. A run may then request `forwardedProps: { agentPreset: "beta" }`. The Gateway validates grants against the roster at activation and calls native `agentPresets.select` under the thread's run reservation before its first turn. The roster alone grants no authority, and the BFF must still authenticate the tenant and authorize access to its application features.
+
+Selection is optional. Omitting it preserves the current composition; repeating the effective canonical id is a no-op, including after restart. A different ungranted id fails with HTTP 403 `PRESET_NOT_ALLOWED`; a granted change after the first turn fails with HTTP 409 `PRESET_LOCKED`. A history-only request never selects a preset, so a session created by a history read can still choose one on its first work run. The native session log owns the selected composition and restores it after restart. Tool names are validated against the selected composition before SSE starts. A successful selection remains recorded if that validation rejects the run or its client disconnects; no user turn is started, and the blank session can select again.
+
 
 `maxRunEvents` must retain at least the mandatory opening and terminal events. `maxRunEventBytes` bounds the complete retained Run record, including `RUN_STARTED` and its terminal event, and must be large enough for the configured maximum identity length. A non-loopback DSH WebServer requires `allowNonLoopback: true`. Prefer a loopback Gateway behind a same-host authenticated BFF.
 
