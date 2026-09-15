@@ -37,6 +37,12 @@
     root: !!js process.env.DSH_AG_UI_FIXTURE_ROOT
     compression: 'none'
 
+- id: user-questions
+  name: '@deepseek-ai/dsh-user-questions'
+
+- id: ask-user
+  name: '@deepseek-ai/dsh-tool-ask-user'
+
 - id: scripted-model
   name: './scripted-model.mjs'
 

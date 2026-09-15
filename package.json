@@ -112,10 +112,33 @@
     "@deepseek-ai/dsh-client-file-upload": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-fs": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-tool-present": "0.1.5-alpha.2",
-    "@deepseek-ai/dsh-agent-presets": "0.1.5-alpha.2"
+    "@deepseek-ai/dsh-agent-presets": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-user-approval": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-user-questions": "0.1.5-alpha.2"
   },
   "peerDependenciesMeta": {
     "@ag-ui/client": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-attachment": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-file-upload": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-fs": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tool-present": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent-presets": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-user-approval": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-user-questions": {
       "optional": true
     }
   },
@@ -156,23 +179,9 @@
     "@deepseek-ai/dsh-attachment": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-fs": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-tool-present": "0.1.5-alpha.2",
-    "@deepseek-ai/dsh-fs-local": "0.1.5-alpha.2"
-  },
-  "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-attachment": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-client-file-upload": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-fs": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-tool-present": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-agent-presets": {
-      "optional": true
-    }
+    "@deepseek-ai/dsh-fs-local": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-tool-ask-user": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-user-approval": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-user-questions": "0.1.5-alpha.2"
   }
 }

@@ -153,6 +153,8 @@ GET /ag-ui/threads/:threadId/deliverables/:eventSeq/files/:fileIndex
 | `maxThreads` | `100` | 最大进程内 live threads |
 | `threadIdleMs` | `1800000` | Idle thread lifetime |
 | `frontendToolTimeoutMs` | `300000` | Browser Tool result 最大等待时间 |
+| `humanInteractionTimeoutMs` | `300000` | 每个原生人工请求的最大等待时间；1 至 2147483647 的整数（毫秒） |
+| `maxPendingInterrupts` | `16` | 每个 thread 的最大待处理人工请求数 |
 | `maxRunEvents` | `4096` | 每个 run 最大保留 events |
 | `maxRunEventBytes` | `2097152` | 每个 run 最大保留 event bytes |
 | `maxRunsPerThread` | `32` | 每个 thread 保留的 run ledger entries 上限，同时也分别限制等待请求的数量 |
@@ -298,6 +300,32 @@ Assistant messages 不能确认此前的 input 已被接受，因此 companion �
 Synthetic result message ID 在原生 inbox 与持久化日志中标识该 action。同一对已生成的 messages 在不同 HTTP run ID 或重启后重试时保持幂等；同一 identity 携带不同 action 内容会被拒绝。每次新点击必须使用新的 result ID，即使 payload 与之前相同。Middleware 重试必须保留已生成的 pair identities。
 
 普通 browser Tool result 不要通过 AG-UI `resume[]` 发送；该字段保留给显式 interrupt/HITL flow。
+
+### 原生问题与审批
+
+在 Host profile 中挂载原生 `@deepseek-ai/dsh-user-questions` 和/或 `@deepseek-ai/dsh-user-approval` 服务。业务 preset 可挂载官方 `@deepseek-ai/dsh-tool-ask-user` Tool。Gateway 只响应自己拥有的精确 live root Agent，不安装服务、不替换审批策略，也不处理子 Agent 的问题。
+
+原生人工请求以 `RUN_FINISHED` 和 `outcome: {type: "interrupt", interrupts: [...]}` 结束当前 HTTP run。Harness turn 仍等待原来的 Promise。在同一 thread 使用新的 `runId` 和 `resume[]` 作答：
+
+```json
+{
+  "threadId": "thread-1",
+  "runId": "answer-1",
+  "messages": [], "tools": [], "context": [], "state": {}, "forwardedProps": {},
+  "resume": [{"interruptId": "<published-id>", "status": "resolved", "payload": {"approved": true}}]
+}
+```
+
+审批使用 `reason: "approval"`、可选的原生 `toolCallId`，以及 `{approved: boolean}` 响应。`false` 拒绝本次操作；`status: "cancelled"` 撤回请求。只有原生服务能授予 `allowed-once`；其 `never` 策略仍直接拒绝，不弹出问题。Gateway 不授予永久权限，也不伪造 backend Tool result。
+
+问题使用 `reason: "user_question"`。`metadata.dsh.questions` 包含原生问题、选项和可选 intent，`responseSchema` 描述答案结构。响应为 `{answers: [{id, selected: ["选项标签"], custom?: "文本"}]}`。每个问题必须恰好回答一次。单选接受一个选项或自定义文本，多选允许两者共存。取消通过原生 `ASK_ABORTED` 错误结束问题。
+
+每个已发布 interrupt 必须在 resume batch 中出现一次。Gateway 在 SSE、消息接纳、context/state 修改和消费答案之前完成整个 batch 的验证。无效 batch 不改变等待中的工作。新 user message 不能与人工响应混用；同一 turn 中已经就绪的 frontend Tool result 可以一并提交。未知 interrupt id 只在已认证 thread 内记录并忽略。保留中的相同 run id 只重放，不会重复作答。
+
+History-only run 重复相同的已发布 interrupt id 和 shared-state snapshot。后到的原生问题等待下次已接纳 continuation，reload 不扩展另一个标签页已有的表单。如果原生问题出现在 frontend Tool 的 HTTP run 结束之后，下次 continuation 或 history read 会发布它。
+
+每个请求有独立且有限的服务器期限，reconnect 不延长期限。超时、原生 abort、overflow 或 dispose 会取消等待中的工作。对已知过期请求提交 resolved 会得到 `INTERRUPT_UNAVAILABLE`；提交 `status: "cancelled"` 可清除客户端旧 gate，且不会执行任何操作。当前客户端也拒绝取消已过期 interrupt，因此暂不发送 `expiresAt`。
+
 
 ## Shared state
 
@@ -474,8 +502,10 @@ Tool set 不变时保留 Tool-schema prefix。添加、删除或修改 Tool 可�
 - Host 重启后通过 `agents.resume()` 恢复已保存的会话。不会恢复挂起的 browser Tool：被中断的回合返回 `THREAD_INTERRUPTED`，shared state 需要新的 client baseline。
 - Assistant messages 和 Tool results 投影为文本；文件交付物使用单独的 activity。
 - 不支持 partial SSE reconnect。
-- 尚未适配 `STATE_DELTA`、AG-UI interrupt/HITL `resume[]` 和 reasoning events。
+- `STATE_DELTA` and reasoning events are not adapted yet.
 - Shared-state update 使用 top-level shallow merge，不提供 version、deep merge 或 conflict resolution。
+
+人工交互仅支持 root Agent；重启不恢复等待中的人工 Promise，使用现有 `THREAD_INTERRUPTED` 恢复流程。History-only run 可重新读取问题，但不支持部分 SSE 重连。如果 embedding adapter 启用 `idleShutdownMs`，其独立的子进程关闭策略可能中断人工等待；需要继续同一 live turn 时应保持 auto-shutdown 关闭。
 
 ## 开发
 

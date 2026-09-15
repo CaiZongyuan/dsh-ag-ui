@@ -17,6 +17,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Per-tenant `selectableAgentPresets` grants let a run select a blank thread composition through native `agentPresets.select`; history stays read-only and started threads keep their recorded preset.
 
 - Native `present` declarations project as durable `dsh-deliverables` activities with authenticated, bounded Session-filesystem downloads.
+
+- Native root-Agent questions and one-shot approvals over AG-UI interrupt outcomes and `resume[]`, with bounded waits, readonly reconnect and atomic continuation admission.
+
 - Bidirectional shared state with `STATE_SNAPSHOT` and the reserved `ag_ui_update_state` Tool.
 - Dojo-compatible keyless examples for chat, backend Tools, shared state, HITL, and tool-based generative UI.
 

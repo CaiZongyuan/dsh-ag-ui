@@ -6,10 +6,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
-import type { RunAgentInput, Tool } from '@ag-ui/core'
+import { RunFinishedEventSchema, type RunAgentInput, type Tool } from '@ag-ui/core'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { Context } from '@deepseek-ai/cordis'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
+import Approval from '@deepseek-ai/dsh-user-approval'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { ScriptedAdapter, type ScriptedResponse, textResponse, toolResponse } from './scripted-adapter.ts'
 import { mountTestAgentCore } from './agent-core.ts'
@@ -158,6 +159,10 @@ describe('AG-UI configuration', () => {
     [{ maxFileBytes: 0 }, 'maxFileBytes must be positive'],
 
     [{ workspaceRoot: '' }, 'workspaceRoot must not be empty'],
+
+    [{ humanInteractionTimeoutMs: 0 }, 'humanInteractionTimeoutMs must be positive'],
+    [{ humanInteractionTimeoutMs: 2_147_483_648 }, 'humanInteractionTimeoutMs must not exceed 2147483647'],
+    [{ maxPendingInterrupts: Number.MAX_SAFE_INTEGER + 1 }, 'maxPendingInterrupts must be a finite positive integer'],
     [{ maxThreads: 0 }, 'maxThreads must be positive'],
     [{ maxFilesPerMessage: 0 }, 'maxFilesPerMessage must be positive'],
     [{ threadIdleMs: 0 }, 'threadIdleMs must be positive'],
@@ -165,6 +170,10 @@ describe('AG-UI configuration', () => {
     [{ maxRunEventBytes: 1 }, 'maxRunEventBytes cannot retain mandatory opening and terminal events'],
   ] as const)('rejects invalid configuration %#', async (overrides, message) => {
     await expect(mount(overrides)).rejects.toThrow(message)
+  })
+
+  it.each([1, 2_147_483_647])('accepts a human request timeout at the supported boundary: %s', async (humanInteractionTimeoutMs) => {
+    await expect(mount({ humanInteractionTimeoutMs })).resolves.toHaveProperty('gateway')
   })
 
   it('requires explicit permission for a non-loopback bind', async () => {
@@ -569,4 +578,33 @@ describe('AG-UI gateway lifecycle', () => {
     await gateway.dispose()
     expect(ctx.agents.list()).not.toContain(agent)
   })
+})
+
+it('serves native interrupts over HTTP and rejects bad resumes before SSE without losing the question', async () => {
+  const { ctx, url } = await mount({ humanInteractionTimeoutMs: 100 }, [toolResponse('effect', 'effect', {}), textResponse('new prompt')])
+  await ctx.plugin(Approval, {})
+  let effects = 0
+  ctx.tools.register({ name: 'effect', description: 'Protected action.', parameters: { type: 'object', properties: {} },
+    output: { schema: { type: 'string' }, render: () => [{ type: 'text', text: 'done' }] },
+    execute: () => { effects++; return Promise.resolve('done') } })
+  ctx.on('tools/pre-execute', () => Promise.resolve({ kind: 'ask', reason: 'May I?' }))
+  const first = await post(url, input())
+  expect(first.status).toBe(200)
+  const terminal = RunFinishedEventSchema.parse(JSON.parse(first.body.trim().split('data: ').at(-1)!))
+  if (terminal.outcome?.type !== 'interrupt') throw new Error('Expected an interrupt')
+  const id = terminal.outcome.interrupts[0]!.id
+  const invalid = input({ runId: 'answer', messages: [], resume: [{ interruptId: id, status: 'resolved', payload: { approved: 'yes' } }] })
+  expectCode(await post(url, invalid), 400, 'INVALID_INTERRUPT_RESPONSE')
+  expectCode(await post(url, invalid), 400, 'INVALID_INTERRUPT_RESPONSE')
+  const foreign = await post(url, input({ runId: 'foreign', messages: [], resume: [{ interruptId: id, status: 'resolved', payload: { approved: true } }] }), { 'x-dsh-user-id': 'another-user' })
+  expect(foreign.status).toBe(200)
+  expect(effects).toBe(0)
+  await ctx.agents.roots()[0]!.whenIdle()
+  expectCode(await post(url, input({ runId: 'late', messages: [], resume: [{ interruptId: id, status: 'resolved', payload: { approved: true } }] })), 409, 'INTERRUPT_UNAVAILABLE')
+  const cancelled = await post(url, input({ runId: 'cancel', messages: [], resume: [{ interruptId: id, status: 'cancelled' }] }))
+  expect(cancelled.body).toContain('"type":"success"')
+  const next = await post(url, secondRun())
+  expect(next.status).toBe(200)
+  expect(next.body).toContain('new prompt')
+  expect(effects).toBe(0)
 })
