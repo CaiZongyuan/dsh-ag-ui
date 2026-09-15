@@ -122,7 +122,8 @@ describe('native thread file HTTP routes', () => {
     const location = new URL(source.value, mounted.url)
     const downloaded = await fetch(location, { headers: HEADERS })
     expect(downloaded.status).toBe(200)
-    expect(Buffer.from(await downloaded.arrayBuffer())).toEqual(bytes)
+    // Compare all bytes without blocking the HTTP server on a deep matcher traversal.
+    expect(Buffer.from(await downloaded.arrayBuffer()).equals(bytes)).toBe(true)
     expect(downloaded.headers.get('content-type')).toBe('application/json')
     expect(downloaded.headers.get('content-disposition')).toBe("attachment; filename*=UTF-8''sample.json")
     await expectCode(await fetch(location, { headers: { ...HEADERS, 'x-dsh-user-id': 'other' } }), 404, 'FILE_NOT_FOUND')
