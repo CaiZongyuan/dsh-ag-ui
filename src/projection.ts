@@ -5,6 +5,7 @@ import {
   type InputContent,
   type CustomEvent,
   type Message as AgUiMessage,
+  type ToolMessage as AgUiToolMessage,
 } from '@ag-ui/core'
 import { deliverableMessage, isPresentedEvent } from './deliverables.ts'
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
@@ -56,10 +57,28 @@ export function consumedMessages(events: readonly SessionEvent[]): readonly User
   return [...users.values()]
 }
 
+/** Use the same public result fields for transcript projection and recovered admission checks. */
+function projectedToolResult(sessionId: SessionId, event: Extract<SessionEvent, { type: 'tool/result' }>): AgUiToolMessage {
+  const block = event.data.message.content[0]
+  const callId = String(block.toolCallId)
+  const { id, metadata, ...identity } = projectedResultMeta(event.data.meta)
+  return {
+    id: id ?? resultMessageId(sessionId, callId),
+    ...identity,
+    role: 'tool',
+    toolCallId: callId,
+    content: renderToolResult(block),
+    ...(block.isError ? { error: renderToolResult(block) || 'Tool execution failed' } : {}),
+    ...(isUnknownRecord(metadata) ? { metadata } : {}),
+  }
+}
+
 /** Facts rebuilt from one durable log at cold resume. */
 interface ColdRecovery {
   /** The log's last turn ended interrupted by crash recovery. */
   readonly interrupted: boolean
+  /** Successful frontend results whose accepted identity is persisted in native metadata. */
+  readonly frontendResults: readonly AgUiToolMessage[]
   /** Recovered user messages, as (client id, original content) pairs in log order. */
   readonly users: ReadonlyArray<{ readonly clientId: string; readonly content: string | InputContent[] }>
 }
@@ -342,9 +361,13 @@ export class SessionProjection {
    */
   recoverFrom(events: readonly SessionEvent[]): ColdRecovery {
     let interrupted = false
+    const frontendResults: AgUiToolMessage[] = []
     for (const event of events) {
       if (event.type === 'tool/result') {
         this.serverResultCallIds.add(String(event.data.message.content[0].toolCallId))
+        if (projectedResultMeta(event.data.meta).id !== undefined) {
+          frontendResults.push(projectedToolResult(this.sessionId, event))
+        }
       } else if (event.type === 'turn/end') {
         interrupted = event.data.reason.kind === 'interrupted'
       }
@@ -354,7 +377,7 @@ export class SessionProjection {
       return message.source.kind === 'user' && clientId !== undefined
         ? [{ clientId, content: userContent(message) }] : []
     })
-    return { interrupted, users }
+    return { interrupted, users, frontendResults }
   }
 
   /** Drop call bookkeeping for one finished turn. */
@@ -414,16 +437,7 @@ export class SessionProjection {
         const block = event.data.message.content[0]
         const callId = String(block.toolCallId)
         if (stateCalls.has(callId)) continue
-        const { id, metadata, ...identity } = projectedResultMeta(event.data.meta)
-        messages.push({
-          id: id ?? resultMessageId(this.sessionId, callId),
-          ...identity,
-          role: 'tool',
-          toolCallId: callId,
-          content: renderToolResult(block),
-          ...(block.isError ? { error: renderToolResult(block) || 'Tool execution failed' } : {}),
-          ...(isUnknownRecord(metadata) ? { metadata } : {}),
-        })
+        messages.push(projectedToolResult(this.sessionId, event))
       }
     }
     return messages

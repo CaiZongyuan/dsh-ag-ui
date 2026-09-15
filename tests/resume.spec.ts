@@ -114,6 +114,14 @@ describe('ThreadBinding durable resume', () => {
       const second = await mountDurable([textResponse('continued'), textResponse('continued again')], first.root)
       const resumed = bindingFor(second.ctx, second.root)
       await resumed.initialize()
+      for (const changed of [{ content: 'changed' }, { encryptedValue: 'changed' }, { subagentRunId: 'changed' }, { metadata: { changed: true } }, { toolCallId: 'changed' }, { error: 'changed' }]) {
+        const runId = `conflict-${Object.keys(changed)[0]}`
+        const conflict = resumed.reserveRun(input(runId, [{ ...accepted, ...changed }]), runId)
+        resumed.drive(conflict)
+        await conflict.done
+        expect(eventsOf(conflict).at(-1)).toMatchObject({ type: EventType.RUN_ERROR, code: 'MESSAGE_ID_CONFLICT' })
+      }
+      expect(second.adapter.requests).toHaveLength(0)
       const next = resumed.reserveRun(input('next', [accepted, { id: 'user-2', role: 'user', content: 'Next' }]), 'next')
       resumed.drive(next)
       await next.done
@@ -131,14 +139,6 @@ describe('ThreadBinding durable resume', () => {
       await resumed.liveAgent.whenIdle()
       expect(eventsOf(repeated).at(-1)).toMatchObject({ type: EventType.RUN_FINISHED })
       expect(resumed.liveAgent.session.snapshotEvents().filter(event => event.type === 'tool/result')).toHaveLength(1)
-      for (const changed of [{ content: 'changed' }, { encryptedValue: 'changed' }, { subagentRunId: 'changed' }, { metadata: { changed: true } }]) {
-        const runId = `conflict-${Object.keys(changed)[0]}`
-        const conflict = resumed.reserveRun(input(runId, [{ ...accepted, ...changed }]), runId)
-        resumed.drive(conflict)
-        await conflict.done
-        expect(eventsOf(conflict).at(-1)).toMatchObject({ type: EventType.RUN_ERROR, code: 'MESSAGE_ID_CONFLICT' })
-      }
-
     },
   )
 

@@ -322,6 +322,9 @@ export class ThreadBinding {
       this.userMessageIds.set(durableUserId(user.clientId), user.clientId)
       this.acceptedMessages.set(user.clientId, { role: 'user', digest: messageDigest(user.clientId, user.content) })
     }
+    for (const result of recovery.frontendResults) {
+      this.acceptedMessages.set(result.id, { role: 'tool', digest: frontendResultDigest(result) })
+    }
     this.interrupted = recovery.interrupted
   }
 
