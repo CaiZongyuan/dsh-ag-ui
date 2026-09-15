@@ -36,12 +36,16 @@ const MEDIA_TYPES: Readonly<Record<string, string>> = {
  * @returns a basename safe to join below a thread uploads directory.
  */
 export function sanitizeFileName(value: string): string {
-  // oxlint-disable-next-line no-control-regex -- the wire contract explicitly strips ASCII control characters.
-  const name = value.split(/[\\/]/).at(-1)!.replace(/[\u0000-\u001f\u007f]/g, '').trim()
+  const name = safeBaseName(value)
   if (name === '' || name === '.' || name === '..' || name.startsWith('.') || Buffer.byteLength(name) > 255) {
     throw new AgUiGatewayError('INVALID_FILE_NAME', 'The file name is invalid.', 400)
   }
   return name
+}
+
+function safeBaseName(value: string): string {
+  // oxlint-disable-next-line no-control-regex -- download headers and upload names must not contain control characters.
+  return value.split(/[\\/]/).at(-1)!.replace(/[\u0000-\u001f\u007f]/g, '').trim()
 }
 
 /**
@@ -67,6 +71,39 @@ export function createFileRoute(options: FileRouteOptions): (request: IncomingMe
         const threadId = decodeThreadId(upload[1]!)
         options.validateThreadId(threadId)
         await uploadFile(request, response, principal, threadId, options)
+        return
+      }
+
+      const deliverable = /^([^/]+)\/deliverables\/(\d+)\/files\/(\d+)$/.exec(relative)
+      if (deliverable !== null) {
+        if (request.method !== 'GET') {
+          response.setHeader('allow', 'GET')
+          throw new AgUiGatewayError('METHOD_NOT_ALLOWED', 'File downloads accept GET requests only.', 405)
+        }
+        const principal = options.authenticate(request)
+        const threadId = decodeThreadId(deliverable[1]!)
+        options.validateThreadId(threadId)
+        const seq = Number(deliverable[2])
+        const index = Number(deliverable[3])
+        if (!Number.isSafeInteger(seq) || !Number.isSafeInteger(index)) throw fileNotFound()
+        const cancelled = new AbortController()
+        const onClosed = (): void => { cancelled.abort() }
+        response.once('close', onClosed)
+        try {
+          const binding = await options.bindingFor(principal, threadId)
+          const { path, bytes } = await binding.readDeliverable(seq, index, options.maxFileBytes, cancelled.signal)
+          // Native present permits dotfiles; upload intake's naming restrictions do not apply.
+          const name = safeBaseName(path) || 'download'
+          response.writeHead(200, {
+            'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+            'content-length': bytes.byteLength,
+            'content-type': MEDIA_TYPES[extname(name).toLowerCase()] ?? 'application/octet-stream',
+            'cache-control': 'no-store',
+          })
+          response.end(bytes)
+        } finally {
+          response.off('close', onClosed)
+        }
         return
       }
 

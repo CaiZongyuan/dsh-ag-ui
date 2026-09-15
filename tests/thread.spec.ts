@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getEventListeners } from 'node:events'
+
 import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -89,6 +90,54 @@ function claimTurn(binding: ThreadBinding, controller: ReturnType<ThreadBinding[
   controller.messageId = String(message.id)
   agent.ctx.emit('agent/inbox/claimed', { agent, message, turn })
 }
+describe('thread workspaces', () => {
+  it('creates a workspace without a registry and registers once when one is present', async () => {
+    const headless = await mount()
+    expect((await stat(headless.binding.liveAgent.session.header.cwd ?? '')).isDirectory()).toBe(true)
+
+    const ctx = new Context()
+    contexts.push(ctx)
+    await mountTestAgentCore(ctx)
+    ctx.llm.registerAdapter(['scripted'], new ScriptedAdapter([textResponse('ok')]))
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'ag-ui-registry-workspaces-'))
+    workspaceRoots.push(workspaceRoot)
+    const create = vi.fn(async () => ({}))
+    ctx.provide('workspaceRegistry', { create })
+    const binding = new ThreadBinding(
+      ctx,
+      { tenantId: 'tenant-1', userId: 'user-1' },
+      'registry-thread',
+      SessionId('ag-ui-registry-session'),
+      { ...OPTIONS, workspaceRoot },
+      () => {},
+    )
+    await binding.initialize()
+    expect(create).toHaveBeenCalledOnce()
+    expect(create).toHaveBeenCalledWith(binding.liveAgent.session.header.cwd, 'ag-ui-registry-session')
+    expect(binding.liveAgent.session.header.cwd).not.toContain('registry-thread')
+  })
+
+  it('keeps workspace registry failures loud', async () => {
+    const ctx = new Context()
+    contexts.push(ctx)
+    await mountTestAgentCore(ctx)
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'ag-ui-registry-failure-'))
+    workspaceRoots.push(workspaceRoot)
+    const failure = new Error('workspace registry unavailable')
+    ctx.provide('workspaceRegistry', { create: async () => Promise.reject(failure) })
+    const binding = new ThreadBinding(
+      ctx,
+      { tenantId: 'tenant-1', userId: 'user-1' },
+      'registry-failure',
+      SessionId('ag-ui-registry-failure-session'),
+      { ...OPTIONS, workspaceRoot },
+      () => {},
+    )
+    await expect(binding.initialize()).rejects.toBe(failure)
+    expect(ctx.agents.list()).toHaveLength(0)
+  })
+})
+
 describe('thread workspaces', () => {
   it('creates a workspace without a registry and registers once when one is present', async () => {
     const headless = await mount()
@@ -1712,5 +1761,22 @@ describe('ThreadBinding session projection', () => {
     binding.liveAgent.session.append('turn/end', { turn: 1, reason })
     await controller.done
     expect(controller.record.events.at(-1)).toMatchObject({ type, ...(code === undefined ? {} : { code }) })
+  })
+})
+
+describe('deliverable filesystem availability', () => {
+  it('keeps native declarations visible when the restored host has no filesystem', async () => {
+    const { binding } = await mount()
+    const event = binding.liveAgent.session.append('deliverables/presented', {
+      turn: 1, callId: ToolCallId('present'), files: [{ path: 'report.txt' }],
+    })
+    await expect(binding.readDeliverable(event.seq, 0, 1024, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'FILES_UNSUPPORTED', status: 409 })
+    const history = binding.reserveRun(input('history', []))
+    binding.drive(history)
+    await history.done
+    expect(history.record.events.find(event => event.type === EventType.MESSAGES_SNAPSHOT)).toMatchObject({
+      messages: [{ activityType: 'dsh-deliverables', content: { files: [{ url: `/ag-ui/threads/thread-1/deliverables/${event.seq}/files/0` }] } }],
+    })
   })
 })

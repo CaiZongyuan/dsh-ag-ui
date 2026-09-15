@@ -23,17 +23,17 @@ No child process exists until the first run needs one: `run()` starts the micro-
 ```bash
 pnpm add dsh-ag-ui-adapter @ag-ui/client dsh-ag-ui \
   @deepseek-ai/cordis@4.0.2 \
-  @deepseek-ai/dsh-host-webserver@0.1.5-alpha.1 \
-  @deepseek-ai/dsh-agent@0.1.5-alpha.1 \
-  @deepseek-ai/dsh-agent-loop@0.1.5-alpha.1 \
-  @deepseek-ai/dsh-invariants@0.1.5-alpha.1 \
-  @deepseek-ai/dsh-llm@0.1.5-alpha.1 \
-  @deepseek-ai/dsh-session@0.1.5-alpha.1 \
-  @deepseek-ai/dsh-session-persistence@0.1.5-alpha.1 \
-  @deepseek-ai/dsh-session-projection@0.1.5-alpha.1 \
-  @deepseek-ai/dsh-system-prompt@0.1.5-alpha.1 \
-  @deepseek-ai/dsh-tools@0.1.5-alpha.1 \
-  @deepseek-ai/dsh-util-values@0.1.5-alpha.1
+  @deepseek-ai/dsh-host-webserver@0.1.5-alpha.2 \
+  @deepseek-ai/dsh-agent@0.1.5-alpha.2 \
+  @deepseek-ai/dsh-agent-loop@0.1.5-alpha.2 \
+  @deepseek-ai/dsh-invariants@0.1.5-alpha.2 \
+  @deepseek-ai/dsh-llm@0.1.5-alpha.2 \
+  @deepseek-ai/dsh-session@0.1.5-alpha.2 \
+  @deepseek-ai/dsh-session-persistence@0.1.5-alpha.2 \
+  @deepseek-ai/dsh-session-projection@0.1.5-alpha.2 \
+  @deepseek-ai/dsh-system-prompt@0.1.5-alpha.2 \
+  @deepseek-ai/dsh-tools@0.1.5-alpha.2 \
+  @deepseek-ai/dsh-util-values@0.1.5-alpha.2
 ```
 
 ```ts
@@ -125,7 +125,7 @@ The timeout variables must be positive integers in canonical form (`1500`, not `
 | --- | --- |
 | AG-UI client | `>=0.0.58 <0.1.0` (`~0.0.58`; tested with `0.0.58`) |
 | Node.js | `^22.19.0 || >=24.0.0` |
-| DeepSeek Harness | `0.1.5-alpha.1` (exact developer-preview peers) |
+| DeepSeek Harness | `0.1.5-alpha.2` (exact developer-preview peers) |
 
 ## Development
 

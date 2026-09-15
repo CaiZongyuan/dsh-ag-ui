@@ -98,6 +98,28 @@ lease.dispose()
 
 后应用的 Profile patch 会替换 bundle row 的完整 `config`；请包含 deployment 所需的全部配置值。
 
+## 已声明的交付文件
+
+Harness 的 `present` 声明投影为标准 AG-UI `ACTIVITY_SNAPSHOT`，其
+`activityType` 为 `dsh-deliverables`。活动消息的 id 由原生会话和事件序号决定，
+历史读取和重启后保持一致。嵌套的 `present` 成功后，即使外层工具失败，声明仍然保留。
+
+活动 `content` 保留原生 `turn`、`callId` 和 `files: [{ path, description? }]`，
+并为每个文件添加相对 `url`。受信任的 BFF 必须使用与 Agent 运行相同的认证租户和用户头代理此 URL：
+
+```text
+GET /ag-ui/threads/:threadId/deliverables/:eventSeq/files/:fileIndex
+```
+
+此路由仅读取已认证线程中的声明，使用该 Session 的原生文件系统和持久化 cwd，
+包括提供方允许的绝对路径。通过原生 preset roster 查找隔离的文件系统，仅在该 preset 未提供文件系统时使用 Host 文件系统。Host 必须在该 Agent 作用域提供 `@deepseek-ai/dsh-fs`，
+并在需要工具的作用域挂载 `@deepseek-ai/dsh-tool-present`。交付文件不需要附件存储或上传凭据。
+响应以附件下载当前文件，并设置 `Cache-Control: no-store`，不会归档最初的字节内容。
+文件已删除或不是普通文件时返回 404，提供方拒绝读取时返回 403，超过 `maxFileBytes` 时返回 413。
+读取受字节上限约束，并在客户端断开时取消。这些 URL 需要认证，不能用作公开分享链接。
+
+客户端在对话记录中渲染 `dsh-deliverables` 活动。普通文件工具结果和客户端提交的工具消息不会生成交付声明。
+
 ## 配置
 
 `provider`、`model` 和 `sharedSecret` 必填。`sharedSecret` 至少包含 16 个 UTF-8 bytes。
@@ -116,7 +138,7 @@ lease.dispose()
 | `userHeader` | `x-dsh-user-id` | 可信 user identity header |
 | `allowNonLoopback` | `false` | 显式允许非 loopback Host bind |
 | `maxRequestBytes` | `262144` | 最大 request body bytes |
-| `maxFileBytes` | `104857600` | 每个上传文件的最大 bytes |
+| `maxFileBytes` | `104857600` | 每个上传文件或交付文件下载的最大 bytes |
 | `maxIdentityBytes` | `256` | 每个 protocol 或 identity ID 的最大 bytes |
 | `maxMessages` | `256` | 每次 request 的最大 message 数量 |
 | `maxMessageBytes` | `524288` | Message JSON 最大总 bytes |
@@ -396,9 +418,9 @@ Backend Tool result 会发出 `TOOL_CALL_RESULT`。Frontend Tool result 不在 A
 | AG-UI core/client/encoder | `>=0.0.59 <0.1.0`（`~0.0.59`；已用 `0.0.59` 验证） |
 | `dsh-ag-ui/client` companion | `@ag-ui/client ~0.0.59` |
 | Node.js | `^22.19.0` 或 `>=24.0.0` |
-| DeepSeek Harness | `0.1.5-alpha.1`（精确的 developer-preview peers） |
+| DeepSeek Harness | `0.1.5-alpha.2`（精确的 developer-preview peers） |
 
-DSH `0.1.5-alpha.1` 使用 v3 会话日志。实时文本通过 `agent/assistant-stream` 接收，已结算历史通过 `snapshotEvents()` 读取。配置 JSONL 持久化插件后，DSH 在恢复时迁移旧日志（已用 `0.1.1-rc.2` 录制验证）。图片和文件 Tool 结果分别投影为 `[image result]` 和 `[file result]` 占位符，不传输附件字节。
+DSH `0.1.5-alpha.2` 使用 v3 会话日志。实时文本通过 `agent/assistant-stream` 接收，已结算历史通过 `snapshotEvents()` 读取。配置 JSONL 持久化插件后，DSH 在恢复时迁移旧日志（已用 `0.1.1-rc.2` 录制验证）。图片和文件 Tool 结果分别投影为 `[image result]` 和 `[file result]` 占位符，不传输附件字节。
 
 DSH 仍处于 developer preview，可能引入 breaking changes。在这些 API 稳定前，本 package 使用精确 DSH peer versions。
 
@@ -450,9 +472,9 @@ Tool set 不变时保留 Tool-schema prefix。添加、删除或修改 Tool 可�
 
 - 活跃 thread 绑定、run 重放缓冲和 shared state 保存在进程内；会话历史可通过 Host 持久化插件保留。
 - Host 重启后通过 `agents.resume()` 恢复已保存的会话。不会恢复挂起的 browser Tool：被中断的回合返回 `THREAD_INTERRUPTED`，shared state 需要新的 client baseline。
-- User input 支持文本和已上传文件；assistant messages 和 Tool results 投影为文本。
+- Assistant messages 和 Tool results 投影为文本；文件交付物使用单独的 activity。
 - 不支持 partial SSE reconnect。
-- 尚未适配 `STATE_DELTA`、AG-UI interrupt/HITL `resume[]`、reasoning events 和 activity events。
+- 尚未适配 `STATE_DELTA`、AG-UI interrupt/HITL `resume[]` 和 reasoning events。
 - Shared-state update 使用 top-level shallow merge，不提供 version、deep merge 或 conflict resolution。
 
 ## 开发

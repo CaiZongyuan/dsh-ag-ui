@@ -1,3 +1,6 @@
+import type {} from '@deepseek-ai/dsh-fs'
+import type {} from '@deepseek-ai/dsh-agent-presets'
+import { isPresentedEvent } from './deliverables.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import { mkdir, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -76,6 +79,8 @@ export interface ThreadOptions {
   readonly maxStateBytes: number
   readonly maxFilesPerMessage: number
   readonly fileSecret?: string
+  /** Gateway route prefix used in declared file URLs. */
+  readonly path?: string
 }
 
 interface AcceptedMessage {
@@ -175,7 +180,8 @@ export class ThreadBinding {
   ) {
     this.identity = { principal, threadId }
     this.sessionId = sessionId
-    this.projection = new SessionProjection(sessionId, this.presenter)
+    this.projection = new SessionProjection(sessionId, this.presenter, (seq, index) =>
+      `${options.path ?? '/ag-ui'}/threads/${encodeURIComponent(threadId)}/deliverables/${String(seq)}/files/${String(index)}`)
   }
 
   /** Create the Agent — resuming a persisted session when the host configured one — and install scoped listeners before publication. */
@@ -692,6 +698,42 @@ export class ThreadBinding {
     const attachments = this.attachments
     using _activity = this.holdFileActivity()
     yield* attachments.readFileStream(file)
+  }
+
+  /** Read only a file declared in this exact Session, using its scoped native filesystem. */
+  async readDeliverable(seq: number, index: number, maxBytes: number, signal: AbortSignal): Promise<{ path: string, bytes: Uint8Array }> {
+    using _activity = this.holdFileActivity()
+    const agent = this.liveAgent
+    const event = agent.session.snapshotEvents().find(event => event.seq === seq)
+    const file = event !== undefined && isPresentedEvent(event) ? event.data.files[index] : undefined
+    const missing = (): AgUiGatewayError => new AgUiGatewayError('FILE_NOT_FOUND', 'The presented file was not found.', 404)
+    if (file === undefined) throw missing()
+    const fs = this.ctx.get('agentPresets')?.serviceFor(agent, 'fs') ?? agent.ctx.get('fs')
+    const cwd = agent.session.header.cwd
+    if (fs === undefined || cwd === undefined) {
+      throw new AgUiGatewayError('FILES_UNSUPPORTED', 'This Session does not provide a workspace filesystem.', 409)
+    }
+    try {
+      signal.throwIfAborted()
+      const entry = await fs.lstat(file.path, { cwd }, signal)
+      if (entry !== undefined && entry.type !== 'file') throw missing()
+      const target = await fs.resolve(file.path, { cwd, signal })
+      const info = await fs.stat(target, signal)
+      if (info === undefined || info.type !== 'file') throw missing()
+      if (info.size !== undefined && info.size > maxBytes) {
+        throw new AgUiGatewayError('FILE_TOO_LARGE', 'The presented file exceeds its byte limit.', 413)
+      }
+      const bytes = await fs.readBytes(target, signal, maxBytes)
+      signal.throwIfAborted()
+      return { path: file.path, bytes }
+    } catch (error) {
+      if (error instanceof Error && 'code' in error) {
+        if (error.code === 'FS_NOT_FOUND' || error.code === 'FS_NOT_REGULAR_FILE') throw missing()
+        if (error.code === 'FS_TOO_LARGE') throw new AgUiGatewayError('FILE_TOO_LARGE', 'The presented file exceeds its byte limit.', 413, error)
+        if (error.code === 'FS_PERMISSION_DENIED' || error.code === 'FS_SANDBOX_DENIED') throw new AgUiGatewayError('FILE_ACCESS_DENIED', 'The Session filesystem denied this read.', 403, error)
+      }
+      throw error
+    }
   }
 
   /** Keep the native Session and its receipts alive until every concurrent file operation settles. */

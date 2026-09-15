@@ -6,6 +6,7 @@ import {
   type CustomEvent,
   type Message as AgUiMessage,
 } from '@ag-ui/core'
+import { deliverableMessage, isPresentedEvent } from './deliverables.ts'
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock, ToolResultBlock, UserMessage } from '@deepseek-ai/dsh-llm'
 import { isAppendSurfaceEvent, type SessionId, type SessionEvent, type TurnEndReason } from '@deepseek-ai/dsh-session'
@@ -122,7 +123,11 @@ export class SessionProjection {
   /** Shared application state carried between runs; committed by state-tool results. */
   sharedState: unknown
 
-  constructor(private readonly sessionId: SessionId, private readonly presenter: ToolPresenter) {}
+  constructor(
+    private readonly sessionId: SessionId,
+    private readonly presenter: ToolPresenter,
+    private readonly deliverableUrl: (seq: number, index: number) => string,
+  ) {}
 
   /** Project transient provider chunks using the turn and step of their stream start. */
   projectStream(frame: AssistantStreamFrame, activeTurn: number | undefined): ProjectionStep {
@@ -157,6 +162,11 @@ export class SessionProjection {
       return EMPTY_STEP
     }
     if (activeTurn === undefined || !eventBelongsToTurn(event, activeTurn)) return EMPTY_STEP
+
+    if (isPresentedEvent(event)) {
+      const message = deliverableMessage(this.sessionId, event, this.deliverableUrl)
+      return { events: [{ type: EventType.ACTIVITY_SNAPSHOT, messageId: message.id, activityType: message.activityType, content: message.content }] }
+    }
 
     switch (event.type) {
       case 'assistant/message': {
@@ -376,6 +386,10 @@ export class SessionProjection {
         for (const block of event.data.message.content) {
           if (block.type === 'tool-call' && block.name === STATE_TOOL_NAME) stateCalls.add(String(block.id))
         }
+      }
+      if (isPresentedEvent(event)) {
+        messages.push(deliverableMessage(this.sessionId, event, this.deliverableUrl))
+        continue
       }
       if (!isAppendSurfaceEvent(event)) continue
       if (event.type === 'user/message') {

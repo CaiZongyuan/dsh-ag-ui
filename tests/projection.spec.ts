@@ -86,7 +86,7 @@ function userMessage(durableId: string, text: string, kind = 'user'): SessionEve
 
 describe('SessionProjection text', () => {
   it('opens one message across deltas and closes it at the assembled message', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     projection.projectStream({ type: 'start', attemptId: LlmAttemptId('attempt'), revision: 1, turn: 1, step: 1 }, 1)
     const first = projection.projectStream({
       type: 'chunk', attemptId: LlmAttemptId('attempt'), revision: 1, index: 0, time: 0,
@@ -108,7 +108,7 @@ describe('SessionProjection text', () => {
   })
 
   it('ignores inactive streams and non-text frames, and clears an ended stream', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     const attemptId = LlmAttemptId('attempt')
     const chunk = {
       type: 'chunk' as const, attemptId, revision: 1, index: 0, time: 0,
@@ -126,7 +126,7 @@ describe('SessionProjection text', () => {
   })
 
   it('projects an assembled-only message as one start/content/end triple', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     const step = projection.project(textMessage('assembled only'), 1)
     expect(step.events).toEqual([
       { type: EventType.TEXT_MESSAGE_START, messageId, role: 'assistant' },
@@ -136,7 +136,7 @@ describe('SessionProjection text', () => {
   })
 
   it('emits nothing for a text-less step', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     const empty = projection.project(textMessage(''), 1)
     expect(empty.events).toEqual([])
   })
@@ -144,7 +144,7 @@ describe('SessionProjection text', () => {
 
 describe('SessionProjection tool calls', () => {
   it('projects a backend call start/args/end triple, its card, and its durable result', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     const call = projection.project(toolCall('call-1', 'backend_tool'), 1)
     expect(call.events.map(item => item.type)).toEqual([
       EventType.TOOL_CALL_START,
@@ -192,14 +192,14 @@ describe('SessionProjection tool calls', () => {
   })
 
   it('records the reserved state call without wire events', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     const call = projection.project(toolCall('state-call', STATE_TOOL_NAME), 1)
     expect(call.events).toEqual([])
     expect(projection.lifecycleOf('state-call')).toMatchObject({ kind: 'state', turn: 1, step: 1 })
   })
 
   it('stays silent for a parked frontend call result but records its id', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     projection.project(toolCall('frontend-call', 'ui_action'), 1)
     projection.markParked('frontend-call', backendLifecycle(projection, 'frontend-call'))
     expect(projection.project(toolResult('frontend-call'), 1).events).toEqual([])
@@ -223,7 +223,7 @@ describe('SessionProjection tool view cards', () => {
   }
 
   it('carries the declared call and result intents, including the durable meta', () => {
-    const projection = new SessionProjection(sessionId, declaring)
+    const projection = new SessionProjection(sessionId, declaring, (seq, index) => `/files/${seq}/${index}`)
     const call = projection.project(event('tool/call', {
       turn: 1, step: 1, callId: ToolCallId('view-1'), name: 'view_tool', arguments: '{"subject":"files"}',
     }), 1)
@@ -266,7 +266,7 @@ describe('SessionProjection tool view cards', () => {
           : undefined),
       isFrontendTool: () => false,
     }
-    const projection = new SessionProjection(sessionId, throwing)
+    const projection = new SessionProjection(sessionId, throwing, (seq, index) => `/files/${seq}/${index}`)
     const malformed = projection.project(event('tool/call', {
       turn: 1, step: 1, callId: ToolCallId('bad-args'), name: 'throwing', arguments: '{oops',
     }), 1)
@@ -285,7 +285,7 @@ describe('SessionProjection tool view cards', () => {
   })
 
   it('excludes client-owned frontend calls from cards on the wire', () => {
-    const projection = new SessionProjection(sessionId, declaring)
+    const projection = new SessionProjection(sessionId, declaring, (seq, index) => `/files/${seq}/${index}`)
     const call = projection.project(toolCall('frontend-1', 'ui_action'), 1)
     expect(call.events.map(item => item.type)).toEqual([
       EventType.TOOL_CALL_START,
@@ -295,13 +295,13 @@ describe('SessionProjection tool view cards', () => {
   })
 
   it('emits a bare result when its call position was never projected', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     const result = projection.project(toolResult('orphan'), 1)
     expect(result.events.map(item => item.type)).toEqual([EventType.TOOL_CALL_RESULT])
   })
 
   it('re-derives identical settled cards from a cold log, skipping excluded, unresolvable, and unresulted calls', () => {
-    const projection = new SessionProjection(sessionId, declaring)
+    const projection = new SessionProjection(sessionId, declaring, (seq, index) => `/files/${seq}/${index}`)
     const log = [
       event('tool/call', {
         turn: 1, step: 1, callId: ToolCallId('view-1'), name: 'view_tool', arguments: '{"subject":"files"}',
@@ -335,7 +335,7 @@ describe('SessionProjection tool view cards', () => {
   })
 
   it('retains original transcript cards and excludes model-only surface replacements', () => {
-    const projection = new SessionProjection(sessionId, declaring)
+    const projection = new SessionProjection(sessionId, declaring, (seq, index) => `/files/${seq}/${index}`)
     const original = toolResult('retained')
     const replacement = { ...toolResult('retained'), surfaceOp: { op: 'replace', startSeq: 1, endSeq: 1 } } as SessionEvent
     const log = [toolCall('retained', 'view_tool'), original, replacement]
@@ -347,14 +347,14 @@ describe('SessionProjection tool view cards', () => {
   })
 
   it('skips a durable result whose call event is absent', () => {
-    const projection = new SessionProjection(sessionId, declaring)
+    const projection = new SessionProjection(sessionId, declaring, (seq, index) => `/files/${seq}/${index}`)
     expect(projection.toolViewEvents([toolResult('orphan')])).toEqual([])
   })
 })
 
 describe('SessionProjection shared state', () => {
   it('commits a changed state update after its durable result', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     projection.project(toolCall('state-call', STATE_TOOL_NAME), 1)
     projection.sharedState = { count: 1 }
     projection.stageCommit('state-call', { value: { count: 2 }, changed: true })
@@ -364,7 +364,7 @@ describe('SessionProjection shared state', () => {
   })
 
   it('ignores commits staged for missing or non-state calls', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     projection.project(toolCall('backend-call', 'backend_tool'), 1)
     projection.stageCommit('backend-call', { value: { count: 9 }, changed: true })
     projection.stageCommit('missing-call', { value: { count: 9 }, changed: true })
@@ -375,7 +375,7 @@ describe('SessionProjection shared state', () => {
     ])
   })
 
-  it('skips unchanged and failed state results', () => {    const projection = new SessionProjection(sessionId, presenter)
+  it('skips unchanged and failed state results', () => {    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     projection.sharedState = { count: 1 }
     projection.project(toolCall('state-unchanged', STATE_TOOL_NAME), 1)
     projection.stageCommit('state-unchanged', { value: { count: 1 }, changed: false })
@@ -409,7 +409,7 @@ describe('SessionProjection history snapshot', () => {
     expect(repairs.filter(value => value.type === 'tool/result'))
       .toMatchObject([{ data: { error: { code: TOOL_NOT_STARTED } } }, { data: { error: { code: TOOL_NOT_STARTED } } }])
 
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     expect(projection.messagesSnapshot([...prefix, ...repairs], () => undefined)).toEqual([
       { id: messageId, role: 'assistant', toolCalls: [
         { id: 'visible', type: 'function', function: { name: 'lookup', arguments: '{}' } },
@@ -436,12 +436,12 @@ describe('SessionProjection history snapshot', () => {
     })
     const events = [announcement, toolCall('state', STATE_TOOL_NAME), toolResult('state'),
       ...(mixed ? [toolCall('visible', 'lookup'), toolResult('visible')] : [])]
-    const live = new SessionProjection(sessionId, presenter)
+    const live = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     const streamed = events.flatMap(value => live.project(value, 1).events)
     expect(streamed.filter(value => 'toolCallId' in value).map(value => value.toolCallId))
       .toEqual(mixed ? ['visible', 'visible', 'visible', 'visible'] : [])
 
-    const cold = new SessionProjection(sessionId, presenter)
+    const cold = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     const messages = cold.messagesSnapshot(events, () => undefined)
     expect(messages).toEqual(mixed ? [
       { id: messageId, role: 'assistant', content: 'Working.', toolCalls: [
@@ -468,7 +468,7 @@ describe('SessionProjection history snapshot', () => {
   })
 
   it('derives the full history, including tool-only assistant messages in durable order', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     const events = [
       event('user/message', {
         id: 'sys-1',
@@ -531,12 +531,12 @@ describe('SessionProjection history snapshot', () => {
   })
 
   it('gives an empty failed durable tool result an explicit error', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     expect(projection.messagesSnapshot([event('tool/result', { turn: 1, step: 1, message: createToolResultMessage({ callId: ToolCallId('empty-failure'), isError: true, content: [] }) })], () => undefined)).toMatchObject([{ role: 'tool', error: 'Tool execution failed' }])
   })
 
   it('keeps a tool-only assistant message so its result is never orphaned', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     const announcement = assistantToolAnnouncement(1, 1)
 
     expect(projection.messagesSnapshot([announcement, toolResult('announced-0')], () => undefined)).toEqual([
@@ -575,13 +575,13 @@ describe('SessionProjection run outcomes', () => {
       [{ kind: 'extension-reason' }, { kind: 'error', code: 'AGENT_EXECUTION_ERROR', message: 'The DSH turn ended with an unsupported reason.' }],
     ] as const
     for (const [reason, outcome] of cases) {
-      const projection = new SessionProjection(sessionId, presenter)
+      const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
       expect(projection.project(event('turn/end', { turn: 1, reason }), 1).outcome).toEqual(outcome)
     }
   })
 
   it('ignores events outside the active turn and releases step slots at step end', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     const nextTurnCall = event('tool/call', {
       turn: 2, step: 1, callId: ToolCallId('other-turn'), name: 'backend_tool', arguments: '{}',
     })
@@ -591,7 +591,7 @@ describe('SessionProjection run outcomes', () => {
   })
 
   it('settles a park immediately when the step announced no further calls', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     projection.project(toolCall('park-1', 'ui_action'), 1)
     expect(projection.parkSettleReady(1, 1, parallel)).toBe(false)
     projection.markParked('park-1', backendLifecycle(projection, 'park-1'))
@@ -599,7 +599,7 @@ describe('SessionProjection run outcomes', () => {
   })
 
   it('holds the park settle until every announced call streamed', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     projection.project(assistantToolAnnouncement(1, 2), 1)
 
     projection.project(toolCall('park-1', 'ui_action'), 1)
@@ -618,7 +618,7 @@ describe('SessionProjection run outcomes', () => {
   })
 
   it('ignores awaiting marks on calls that never parked', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     projection.project(toolCall('server-2', 'backend_tool'), 1)
     projection.markAwaitingResult('server-2')
     projection.markAwaitingResult('missing-call')
@@ -626,7 +626,7 @@ describe('SessionProjection run outcomes', () => {
   })
 
   it('settles once every announced call streamed or parked', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     projection.project(assistantToolAnnouncement(1, 2), 1)
     projection.project(toolCall('park-1', 'ui_action'), 1)
     projection.markParked('park-1', backendLifecycle(projection, 'park-1'))
@@ -638,7 +638,7 @@ describe('SessionProjection run outcomes', () => {
   })
 
   it('clears step progress for one finished turn only', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     projection.project(assistantToolAnnouncement(1, 1), 1)
     projection.project(toolCall('turn-1-park', 'ui_action'), 1)
     projection.markParked('turn-1-park', backendLifecycle(projection, 'turn-1-park'))
@@ -653,7 +653,7 @@ describe('SessionProjection run outcomes', () => {
   })
 
   it('clears call lifecycles only for the finished turn', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     projection.project(toolCall('turn-1-call', 'backend_tool'), 1)
     projection.project(event('tool/call', {
       turn: 2, step: 1, callId: ToolCallId('turn-2-call'), name: 'backend_tool', arguments: '{}',
@@ -666,7 +666,7 @@ describe('SessionProjection run outcomes', () => {
 
 describe('SessionProjection cold recovery', () => {
   it('recovers derived users and recorded server results from a durable log', () => {
-    const projection = new SessionProjection(sessionId, presenter)
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     const recovery = projection.recoverFrom([
       userMessage('sys-1', 'injected context', 'system'),
       userMessage(durableUserId('client-user-1'), 'hello'),
@@ -691,9 +691,9 @@ describe('SessionProjection cold recovery', () => {
       event('agent/inbox/spliced', { target: 'next-step', start: 0, removedCount: 1, inserted: [] }),
       event('agent/inbox/spliced', { target: 'next-step', start: 0, removedCount: 1, inserted: [], outcome: 'canceled' }),
     ]
-    const recovery = new SessionProjection(sessionId, presenter).recoverFrom(events)
+    const recovery = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`).recoverFrom(events)
     expect(recovery.users).toEqual([{ clientId: 'claimed', content: 'run once' }])
-    expect(new SessionProjection(sessionId, presenter).recoverFrom([
+    expect(new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`).recoverFrom([
       ...events, userMessage(durableUserId('claimed'), 'run once'),
     ]).users).toEqual(recovery.users)
   })
@@ -701,22 +701,42 @@ describe('SessionProjection cold recovery', () => {
   it('marks the thread interrupted only when the last turn ended interrupted', () => {
     const turnEnd = (turn: number, kind: string): SessionEvent =>
       event('turn/end', { turn, reason: { kind } })
-    const interrupted = new SessionProjection(sessionId, presenter).recoverFrom([
+    const interrupted = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`).recoverFrom([
       turnEnd(1, 'interrupted'),
     ])
     expect(interrupted.interrupted).toBe(true)
 
-    const recovered = new SessionProjection(sessionId, presenter).recoverFrom([
+    const recovered = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`).recoverFrom([
       turnEnd(1, 'interrupted'),
       turnEnd(2, 'completed'),
     ])
     expect(recovered.interrupted).toBe(false)
 
-    const stale = new SessionProjection(sessionId, presenter).recoverFrom([
+    const stale = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`).recoverFrom([
       turnEnd(1, 'interrupted'),
       turnEnd(2, 'completed'),
       turnEnd(3, 'interrupted'),
     ])
     expect(stale.interrupted).toBe(true)
+  })
+})
+
+describe('native deliverables', () => {
+  it('projects nested declarations with identical live and cold activity identities', () => {
+    const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
+    const declaration = event('deliverables/presented', {
+      turn: 1, callId: ToolCallId('nested-present'), files: [{ path: 'out/report.pdf', description: 'Report' }],
+    })
+    const messages = projection.messagesSnapshot([declaration], () => undefined)
+    expect(messages).toEqual([{
+      id: 'ag-ui:ag-ui-projection-test:0:deliverables', role: 'activity', activityType: 'dsh-deliverables',
+      content: { turn: 1, callId: 'nested-present', files: [{ path: 'out/report.pdf', description: 'Report', url: '/files/0/0' }] },
+    }])
+    const message = messages[0]!
+    expect(projection.project(declaration, 1).events).toEqual([{
+      type: EventType.ACTIVITY_SNAPSHOT, messageId: message.id, activityType: 'dsh-deliverables', content: message.content,
+    }])
+    expect(projection.project(declaration, 2).events).toEqual([])
+    expect(projection.project(declaration, undefined).events).toEqual([])
   })
 })

@@ -334,6 +334,7 @@ export class AgUiGateway extends Service implements AgUiAgentLookup {
       maxStateBytes: this.resolved.maxStateBytes,
       maxFilesPerMessage: this.resolved.maxFilesPerMessage,
       fileSecret: this.resolved.sharedSecret,
+      path: this.resolved.path,
     }
     const binding = new ThreadBinding(this.ctx, principal, threadId, durableSessionId(principal, threadId, this.resolved.sharedSecret), options, (expired) => {
       /* v8 ignore next -- one binding instance owns its idle timer; stale callbacks are contained defensively. */

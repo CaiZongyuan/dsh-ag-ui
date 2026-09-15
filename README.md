@@ -98,6 +98,36 @@ Environment variables are the shortest setup path. A Profile can instead overrid
 
 A later Profile patch replaces the bundle row's complete `config`; include every value that deployment needs.
 
+## Presented deliverables
+
+Harness `present` declarations become standard AG-UI `ACTIVITY_SNAPSHOT` events with
+`activityType: "dsh-deliverables"`. Their activity messages survive history reads and
+restart with the same id, derived from the native session and event sequence. Nested
+`present` calls are included even if their enclosing tool later fails.
+
+Activity `content` preserves native `turn`, `callId`, and `files: [{ path, description? }]`,
+adding a relative `url` to each file. A trusted BFF must proxy this URL with the same
+authenticated tenant and user headers as agent runs:
+
+```text
+GET /ag-ui/threads/:threadId/deliverables/:eventSeq/files/:fileIndex
+```
+
+The route reads only a declaration from that authenticated thread. It uses the Session's
+native filesystem and persisted cwd, including absolute paths the provider permits.
+Preset-isolated filesystems are resolved through the native preset roster; the host
+filesystem is used only when that preset supplies none.
+The host must supply `@deepseek-ai/dsh-fs` in that Agent scope and mount
+`@deepseek-ai/dsh-tool-present` where the tool should be available. No attachment store
+or upload receipt is needed for a deliverable. The response downloads the current file
+as an attachment with `Cache-Control: no-store`; it does not archive the original bytes.
+Deleted files and non-regular files return 404, provider access denials return 403,
+and files exceeding `maxFileBytes` return 413. Reads are bounded and cancelled when the
+client disconnects. The URLs are authenticated references, not public sharing links.
+
+Render `dsh-deliverables` activities in the client's transcript. They do not turn generic
+file tool results or client-supplied tool messages into declared deliverables.
+
 ## Configuration
 
 `provider`, `model`, and `sharedSecret` are required. `sharedSecret` must contain at least 16 UTF-8 bytes.
@@ -116,7 +146,7 @@ A later Profile patch replaces the bundle row's complete `config`; include every
 | `userHeader` | `x-dsh-user-id` | Trusted user identity header |
 | `allowNonLoopback` | `false` | Permit a non-loopback Host bind explicitly |
 | `maxRequestBytes` | `262144` | Maximum request body bytes |
-| `maxFileBytes` | `104857600` | Maximum bytes per uploaded file |
+| `maxFileBytes` | `104857600` | Maximum bytes per uploaded file or deliverable download |
 | `maxIdentityBytes` | `256` | Maximum bytes per protocol or identity ID |
 | `maxMessages` | `256` | Maximum message count per request |
 | `maxMessageBytes` | `524288` | Maximum combined message JSON bytes |
@@ -395,9 +425,9 @@ An unexpected HTTP disconnect cancels the Gateway-owned DSH turn. `HttpAgent` do
 | AG-UI core/client/encoder | `>=0.0.59 <0.1.0` (`~0.0.59`; tested with `0.0.59`) |
 | `dsh-ag-ui/client` companion | `@ag-ui/client ~0.0.59` |
 | Node.js | `^22.19.0` or `>=24.0.0` |
-| DeepSeek Harness | `0.1.5-alpha.1` (exact developer-preview peers) |
+| DeepSeek Harness | `0.1.5-alpha.2` (exact developer-preview peers) |
 
-DSH `0.1.5-alpha.1` uses session log v3. Live text arrives through `agent/assistant-stream`; settled history is read with `snapshotEvents()`. With the JSONL persistence plugin configured, DSH migrates older logs on resume (tested with a `0.1.1-rc.2` recording). Image and file Tool results are represented by `[image result]` and `[file result]` placeholders; attachment bytes are not transported.
+DSH `0.1.5-alpha.2` uses session log v3. Live text arrives through `agent/assistant-stream`; settled history is read with `snapshotEvents()`. With the JSONL persistence plugin configured, DSH migrates older logs on resume (tested with a `0.1.1-rc.2` recording). Image and file Tool results are represented by `[image result]` and `[file result]` placeholders; attachment bytes are not transported.
 
 DSH is in developer preview and can introduce breaking changes. This package uses exact DSH peer versions until those APIs stabilize.
 
@@ -449,9 +479,9 @@ An unchanged Tool set preserves the Tool-schema prefix. Adding, removing, or cha
 
 - Live thread bindings, run replay buffers, and shared state are process-local; session history can persist through the Host persistence plugin.
 - Host restart resumes stored sessions with `agents.resume()`. Parked browser Tools are not recovered: an interrupted turn reports `THREAD_INTERRUPTED`, and shared state needs a new client baseline.
-- User input supports text and uploaded files; assistant messages and Tool results are projected as text.
+- Assistant messages and Tool results are projected as text; file deliverables use separate activities.
 - Partial SSE reconnect is not supported.
-- `STATE_DELTA`, AG-UI interrupt/HITL `resume[]`, reasoning events, and activity events are not adapted yet.
+- `STATE_DELTA`, AG-UI interrupt/HITL `resume[]`, and reasoning events are not adapted yet.
 - Shared-state updates use shallow top-level merge and do not provide versions, deep merge, or conflict resolution.
 
 ## Development

@@ -31,7 +31,7 @@ async function mount(root?: string, threadIdleMs = 60000, onExpired: (binding: T
   await ctx.plugin(JsonlSessionPersistence, { root: join(directory, 'sessions'), compression: 'none' })
   ctx.llm.registerAdapter(['scripted'], new ScriptedAdapter(Array.from({ length: 10 }, () => textResponse('ok'))))
   const binding = new ThreadBinding(ctx, { tenantId: 'tenant', userId: 'user' }, 'thread-1', SessionId('native-content'), {
-    provider: 'scripted', model: 'scripted', fileSecret: 'test-only-upload-signing-secret',
+    provider: 'scripted', model: 'scripted', fileSecret: 'test-only-upload-signing-secret', workspaceRoot: join(directory, 'workspaces'),
     frontendToolTimeoutMs: 1000, threadIdleMs, maxRunEvents, maxRunEventBytes: 128 * 1024,
     maxRunsPerThread: 10, maxStateBytes: 64 * 1024, maxFilesPerMessage: 2,
   }, onExpired)
@@ -283,7 +283,7 @@ describe('native file receipt admission', () => {
     contexts.push(ctx)
     await mountTestAgentCore(ctx)
     const binding = new ThreadBinding(ctx, { tenantId: 't', userId: 'u' }, 't', SessionId('text-only'), {
-      provider: 'scripted', model: 'scripted', frontendToolTimeoutMs: 1000,
+      provider: 'scripted', model: 'scripted', frontendToolTimeoutMs: 1000, workspaceRoot: tmpdir(),
       threadIdleMs: 1000, maxRunEvents: 100, maxRunEventBytes: 100000, maxRunsPerThread: 10,
       maxStateBytes: 1000, maxFilesPerMessage: 2,
     }, () => {})

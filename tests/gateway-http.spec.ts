@@ -3,6 +3,9 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdtemp, realpath, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, relative } from 'node:path'
 import type { RunAgentInput, Tool } from '@ag-ui/core'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { Context } from '@deepseek-ai/cordis'
@@ -13,6 +16,8 @@ import { mountTestAgentCore } from './agent-core.ts'
 import AgUiGateway, { Config as GatewayConfig, type Config } from 'dsh-ag-ui'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { ThreadBinding } from '../src/thread.ts'
+import { durableSessionId } from '../src/session-id.ts'
+
 import { durableSessionId } from '../src/session-id.ts'
 
 const SECRET = 'test-only-ag-ui-shared-secret'
@@ -151,6 +156,8 @@ describe('AG-UI configuration', () => {
     [{ workspaceRoot: '' }, 'workspaceRoot must not be empty'],
 
     [{ maxFileBytes: 0 }, 'maxFileBytes must be positive'],
+
+    [{ workspaceRoot: '' }, 'workspaceRoot must not be empty'],
     [{ maxThreads: 0 }, 'maxThreads must be positive'],
     [{ maxFilesPerMessage: 0 }, 'maxFilesPerMessage must be positive'],
     [{ threadIdleMs: 0 }, 'threadIdleMs must be positive'],
