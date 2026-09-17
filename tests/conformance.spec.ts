@@ -242,6 +242,19 @@ describe('AG-UI five-feature conformance', () => {
     ])
     await expectLifecycleValid(resumeEvents)
     expect(agent.messages.findLast(message => message.role === 'assistant')).toMatchObject({ role: 'assistant', content: 'Draft updated. Please review it before submitting.' })
+    // The run-start snapshot already carries the admitted Tool result, so the
+    // client keeps its copy in place and the transcript stays in turn order.
+    const parkedCall = parkEvents.find((event): event is ToolCallStartEvent => event.type === EventType.TOOL_CALL_START)
+    expect(resumeEvents[1]).toMatchObject({
+      type: EventType.MESSAGES_SNAPSHOT,
+      messages: [
+        { id: 'hitl-user', role: 'user' },
+        { id: parkedCall?.parentMessageId, role: 'assistant' },
+        { id: 'hitl-tool-result', role: 'tool', toolCallId: 'conformance-frontend-call', content: '{"status":"applied","version":4}' },
+      ],
+    })
+    expect(resumeEvents.at(-2)).toMatchObject({ type: EventType.MESSAGES_SNAPSHOT, messages: agent.messages })
+    expect(agent.messages.map(message => message.role)).toEqual(['user', 'assistant', 'tool', 'assistant'])
   })
 
   it('several frontend tools in one step park together and resume in subset runs', async () => {

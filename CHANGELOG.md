@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- The run-start `MESSAGES_SNAPSHOT` of a frontend Tool continuation carries the admitted Tool results, so clients keep them in turn order instead of dropping and re-appending them after the reply.
 - `MESSAGES_SNAPSHOT` now reconstructs assistant Tool calls from durable DSH messages, so Tool-only assistant messages and their results remain correlated after replay.
 - `MESSAGES_SNAPSHOT` now includes the user messages the run just admitted and is emitted only after admission, so a client keeps the message it sent and a rejected run leaves its history untouched.
 

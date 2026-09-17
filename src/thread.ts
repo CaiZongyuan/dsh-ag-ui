@@ -540,7 +540,7 @@ export class ThreadBinding {
           throw new AgUiGatewayError('INVALID_TOOL_RESULT_METADATA', 'Frontend Tool result metadata must be lossless JSON.')
         }
       }
-      this.emitHistory(controller, [])
+      this.emitHistory(controller, tools)
       /* v8 ignore next -- a continuation whose history snapshot overflowed the run budget is already settled; the user path covers the same guard. */
       if (controller.record.state !== 'active') return
       const baseline = this.prepareSharedState(controller.input)
@@ -583,17 +583,21 @@ export class ThreadBinding {
   }
 
   /**
-   * Emit the durable transcript beside the user messages this run has just
-   * admitted; the DSH log records those only once the driver claims them.
-   * @param accepted - new client user messages, in arrival order.
+   * Emit the durable transcript beside the messages this run has just
+   * admitted; the DSH log records those only once the driver claims them
+   * (user messages) or the parked call resolves (frontend Tool results).
+   * A snapshot that left them out would make the client drop its copies.
+   * @param accepted - new client user or Tool messages, in arrival order.
    */
-  private emitHistory(controller: RunController, accepted: readonly AgUiUserMessage[]): void {
+  private emitHistory(controller: RunController, accepted: readonly (AgUiUserMessage | AgUiToolMessage)[]): void {
     const events = this.liveAgent.session.snapshotEvents()
     controller.emit({
       type: EventType.MESSAGES_SNAPSHOT,
       messages: [
         ...this.projection.messagesSnapshot(events, id => this.userMessageIds.get(id)),
-        ...accepted.map(message => ({ id: message.id, role: 'user' as const, content: message.content })),
+        ...accepted.map(message => message.role === 'user'
+          ? { id: message.id, role: 'user' as const, content: message.content }
+          : { id: message.id, role: 'tool' as const, toolCallId: message.toolCallId, content: message.content }),
       ],
     })
     // the transcript's settled cards ride beside the snapshot, re-derived from the same durable log
