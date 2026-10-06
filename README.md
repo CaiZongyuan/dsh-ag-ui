@@ -130,7 +130,7 @@ A later Profile patch replaces the bundle row's complete `config`; include every
 | `maxRunEventBytes` | `2097152` | Maximum retained event bytes per run |
 | `maxRunsPerThread` | `32` | Maximum retained run ledger entries per thread |
 
-`agentPreset` composes each thread's agent from the host's agent-presets roster (mount the roster plugin before this Gateway); an unresolvable id fails Gateway activation loudly, a per-tenant entry overrides the deployment default for that tenant's threads, and a resumed thread keeps the composition its own durable session recorded. Without `agentPreset`, threads keep the host composition unchanged.
+`agentPreset` composes each thread's agent from the host's agent-preset registry (mount the roster plugin before this Gateway); an unresolvable id fails Gateway activation loudly, a per-tenant entry overrides the deployment default for that tenant's threads, and a resumed thread keeps the composition its own durable session recorded. Without `agentPreset`, threads keep the host composition unchanged.
 
 `maxRunEvents` must retain at least the mandatory opening and terminal events. `maxRunEventBytes` bounds the complete retained Run record, including `RUN_STARTED` and its terminal event, and must be large enough for the configured maximum identity length. A non-loopback DSH WebServer requires `allowNonLoopback: true`. Prefer a loopback Gateway behind a same-host authenticated BFF.
 
@@ -358,9 +358,9 @@ An unexpected HTTP disconnect cancels the Gateway-owned DSH turn. `HttpAgent` do
 | --- | --- |
 | AG-UI core/client/encoder | `>=0.0.58 <0.1.0` (`~0.0.58`; tested with `0.0.58`) |
 | Node.js | `^22.19.0` or `>=24.0.0` |
-| DeepSeek Harness | `0.1.5-rc.2` (exact release-candidate peers) |
+| DeepSeek Harness | `0.2.0-rc.2` (exact release-candidate peers) |
 
-DSH `0.1.5-rc.2` uses session log v3. Live text arrives through `agent/assistant-stream`; settled history is read with `snapshotEvents()`. With the JSONL persistence plugin configured, DSH migrates older logs on resume (tested with a `0.1.1-rc.2` recording). Image and file Tool results are represented by `[image result]` and `[file result]` placeholders; attachment bytes are not transported.
+DSH `0.2.0-rc.2` uses session log v4. Live text arrives through `agent/assistant-stream`; settled history is read with `snapshotEvents()`. With the JSONL persistence plugin configured, DSH migrates older logs on resume (tested with a `0.1.1-rc.2` recording). Image and file Tool results are represented by `[image result]` and `[file result]` placeholders; attachment bytes are not transported.
 
 DSH is in developer preview and can introduce breaking changes. This package uses exact DSH peer versions until those APIs stabilize.
 

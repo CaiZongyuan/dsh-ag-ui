@@ -92,9 +92,8 @@ describe('AG-UI Gateway', () => {
     expect(harness.adapter.requests[0]?.messages.some(message => message.content.some(block =>
       block.type === 'text' && block.text.includes('"title":"Draft"')))).toBe(true)
     expect(harness.adapter.requests[0]?.tools.some(tool => tool.name === 'ag_ui_update_state')).toBe(true)
-    expect(harness.adapter.requests[1]?.messages.some(message => message.content.some(block =>
-      block.type === 'tool-result' && block.content.some(content =>
-        content.type === 'text' && content.text.includes('Pasta Primavera'))))).toBe(true)
+    expect(harness.adapter.requests[1]?.messages.some(message => message.role === 'tool'
+      && message.content.some(content => content.type === 'text' && content.text.includes('Pasta Primavera')))).toBe(true)
 
     const dshAgent = harness.ctx.agents.list()[0]
     expect(dshAgent).toBeDefined()
@@ -193,9 +192,8 @@ describe('AG-UI Gateway', () => {
     const secondRequest = harness.adapter.requests[1]
     expect(secondRequest?.messages.some(message => message.content.some(block =>
       block.type === 'text' && block.text.includes('"draftVersion":4')))).toBe(true)
-    expect(secondRequest?.messages.some(message => message.content.some(block =>
-      block.type === 'tool-result' && block.content.some(content =>
-        content.type === 'text' && content.text.includes('"version":4'))))).toBe(true)
+    expect(secondRequest?.messages.some(message => message.role === 'tool'
+      && message.content.some(content => content.type === 'text' && content.text.includes('"version":4')))).toBe(true)
   })
 
   it('parks several frontend Tools in one step and resumes in subset runs', async () => {
@@ -342,9 +340,8 @@ describe('AG-UI Gateway', () => {
 
     expect(frontendCallEvents.map(event => event.type)).toContain(EventType.TOOL_CALL_END)
     expect(frontendResultEvents.some(event => event.type === EventType.TOOL_CALL_RESULT)).toBe(false)
-    expect(harness.adapter.requests.at(-1)?.messages.some(message => message.content.some(block =>
-      block.type === 'tool-result' && block.content.some(content =>
-        content.type === 'text' && content.text.includes('applied'))))).toBe(true)
+    expect(harness.adapter.requests.at(-1)?.messages.some(message => message.role === 'tool'
+      && message.content.some(content => content.type === 'text' && content.text.includes('applied')))).toBe(true)
   })
 
   it('replays a completed run idempotently and rejects a conflicting reuse', async () => {

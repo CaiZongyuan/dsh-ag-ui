@@ -8,7 +8,7 @@ import {
   type UserMessage as AgUiUserMessage,
 } from '@ag-ui/core'
 import type { Agent, AgentHandle, AgentSetup } from '@deepseek-ai/dsh-agent'
-import { createUserMessage, errorChain, freezeMessage, MessageId, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, errorChain, freezeMessage, MessageId, ToolCallId, type ContextFormed } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
 import {
@@ -26,6 +26,12 @@ import { agentPresetsOf, sessionPresetOf } from './presets.ts'
 import { RunController, type RunRecord } from './run.ts'
 import type { ToolPresenter } from './tool-view.ts'
 import type { AgUiPrincipal, AgUiThreadIdentity } from './types.ts'
+
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'ag-ui': { readonly kind: 'ag-ui' } & ContextFormed
+  }
+}
 
 const FRONTEND_TOOL_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/
 
@@ -441,7 +447,7 @@ export class ThreadBinding {
     const text = sections.map(section => `## ${section.name}\n${section.text}`).join('\n\n')
     this.liveAgent.inject(createUserMessage({
       content: [{ type: 'text', text }],
-      source: { kind: 'plugin', plugin: 'ag-ui', form: 'snapshot', sections },
+      source: { kind: 'ag-ui', form: 'snapshot', sections },
     }))
   }
 

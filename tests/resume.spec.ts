@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import { SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { EventType, type RunAgentInput } from '@ag-ui/core'
 import { ScriptedAdapter, textResponse } from './scripted-adapter.ts'
 import { mountTestAgentCore } from './agent-core.ts'
@@ -200,7 +200,7 @@ async function sessionLogPath(root: string, sessionId: SessionId = SESSION): Pro
     if (!project.isDirectory()) continue
     const entries = await readdir(join(root, project.name), { withFileTypes: true })
     const match = entries.find(entry => entry.isDirectory() && entry.name === String(sessionId))
-    if (match !== undefined) return join(root, project.name, match.name, 'session.v3.jsonl')
+    if (match !== undefined) return join(root, project.name, match.name, `session.v${SESSION_FORMAT_VERSION}.jsonl`)
   }
   throw new Error(`no persisted session ${String(sessionId)} under ${root}`)
 }

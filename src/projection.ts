@@ -1,6 +1,6 @@
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import { EventType, type BaseEvent, type CustomEvent, type Message as AgUiMessage } from '@ag-ui/core'
-import type { ContentBlock, ToolResultBlock } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, ToolResultMessage } from '@deepseek-ai/dsh-llm'
 import { type SessionId, type SessionEvent, type TurnEndReason } from '@deepseek-ai/dsh-session'
 import {
   parseToolArguments,
@@ -190,7 +190,7 @@ export class SessionProjection {
         }
       }
       case 'tool/result': {
-        const block = event.data.message.content[0]
+        const block = event.data.message
         const callId = String(block.toolCallId)
         const lifecycle = this.toolCallLifecycles.get(callId)
         this.toolCallLifecycles.delete(callId)
@@ -304,7 +304,7 @@ export class SessionProjection {
         const clientId = clientUserId(String(event.data.id))
         if (clientId !== undefined) users.push({ clientId, content: joinText(event.data.content) })
       } else if (event.type === 'tool/result') {
-        this.serverResultCallIds.add(String(event.data.message.content[0].toolCallId))
+        this.serverResultCallIds.add(String(event.data.message.toolCallId))
       } else if (event.type === 'turn/end') {
         interrupted = event.data.reason.kind === 'interrupted'
       }
@@ -350,7 +350,7 @@ export class SessionProjection {
           content: text,
         })
       } else if (event.type === 'tool/result') {
-        const block = event.data.message.content[0]
+        const block = event.data.message
         const callId = String(block.toolCallId)
         messages.push({
           id: resultMessageId(this.sessionId, callId),
@@ -381,7 +381,7 @@ export class SessionProjection {
       if (event.type === 'tool/call') {
         calls.set(String(event.data.callId), { toolName: event.data.name, args: parseToolArguments(event.data.arguments) })
       } else if (event.type === 'tool/result') {
-        const block = event.data.message.content[0]
+        const block = event.data.message
         const callId = String(block.toolCallId)
         const call = calls.get(callId)
         if (call === undefined) continue
@@ -455,7 +455,7 @@ function turnOutcome(reason: TurnEndReason): RunOutcome {
 }
 
 /** Flatten DSH model-facing Tool content into the AG-UI string result field. */
-function renderToolResult(block: ToolResultBlock): string {
+function renderToolResult(block: ToolResultMessage): string {
   const text: string[] = []
   for (const content of block.content) {
     if (content.type === 'text') text.push(content.text)
@@ -463,7 +463,7 @@ function renderToolResult(block: ToolResultBlock): string {
     else if (content.type === 'image') text.push('[image result]')
     else if (content.type === 'file') text.push('[file result]')
     else if (content.type === 'tool-call') text.push(`[nested tool call: ${content.name}]`)
-    else text.push(renderToolResult(content))
+    else text.push(`[${content.type} result]`)
   }
   return text.join('\n')
 }
