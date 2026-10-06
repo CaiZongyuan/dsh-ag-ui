@@ -22,18 +22,18 @@ No child process exists until the first run needs one: `run()` starts the micro-
 
 ```bash
 pnpm add dsh-ag-ui-adapter @ag-ui/client dsh-ag-ui \
-  @deepseek-ai/cordis@4.0.2 \
-  @deepseek-ai/dsh-host-webserver@0.1.5-rc.2 \
-  @deepseek-ai/dsh-agent@0.1.5-rc.2 \
-  @deepseek-ai/dsh-agent-loop@0.1.5-rc.2 \
-  @deepseek-ai/dsh-invariants@0.1.5-rc.2 \
-  @deepseek-ai/dsh-llm@0.1.5-rc.2 \
-  @deepseek-ai/dsh-session@0.1.5-rc.2 \
-  @deepseek-ai/dsh-session-persistence@0.1.5-rc.2 \
-  @deepseek-ai/dsh-session-projection@0.1.5-rc.2 \
-  @deepseek-ai/dsh-system-prompt@0.1.5-rc.2 \
-  @deepseek-ai/dsh-tools@0.1.5-rc.2 \
-  @deepseek-ai/dsh-util-values@0.1.5-rc.2
+  @deepseek-ai/cordis@4.0.4 \
+  @deepseek-ai/dsh-host-webserver@0.2.0-rc.2 \
+  @deepseek-ai/dsh-agent@0.2.0-rc.2 \
+  @deepseek-ai/dsh-agent-loop@0.2.0-rc.2 \
+  @deepseek-ai/dsh-invariants@0.2.0-rc.2 \
+  @deepseek-ai/dsh-llm@0.2.0-rc.2 \
+  @deepseek-ai/dsh-session@0.2.0-rc.2 \
+  @deepseek-ai/dsh-session-persistence@0.2.0-rc.2 \
+  @deepseek-ai/dsh-session-projection@0.2.0-rc.2 \
+  @deepseek-ai/dsh-system-prompt@0.2.0-rc.2 \
+  @deepseek-ai/dsh-tools@0.2.0-rc.2 \
+  @deepseek-ai/dsh-util-values@0.2.0-rc.2
 ```
 
 ```ts
@@ -125,11 +125,11 @@ The timeout variables must be positive integers in canonical form (`1500`, not `
 | --- | --- |
 | AG-UI client | `>=0.0.58 <0.1.0` (`~0.0.58`; tested with `0.0.58`) |
 | Node.js | `^22.19.0 || >=24.0.0` |
-| DeepSeek Harness | `0.1.5-rc.2` (exact release-candidate peers) |
+| DeepSeek Harness | `0.2.0-rc.2` (exact release-candidate peers) |
 
 ## Development
 
-The package is part of the `dsh-ag-ui` pnpm workspace. `pnpm check` inside this directory runs lint, strict TypeScript, coverage-gated tests, the build, and publint; the end-to-end specs spawn a real micro-host with a keyless scripted model and assert the agentic-chat scenario, session memory across runs, and the failure and shutdown paths.
+The package is part of the `dsh-ag-ui` pnpm workspace. `pnpm check` inside this directory runs lint, strict TypeScript, coverage-gated tests, the build, and publint; the end-to-end specs spawn a real micro-host with a keyless scripted model and assert the agentic-chat scenario, session memory across runs, successful/error/empty tool results and their cards, and the failure and shutdown paths. From the repository root, run `pnpm -r --include-workspace-root check` to verify every package.
 
 ## License
 

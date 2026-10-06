@@ -13,7 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- Updated the exact DeepSeek Harness target to `0.2.0-rc.2`, with first-class tool-result messages, producer-specific context sources, declarative preset registration, and v4 session persistence.
+- Updated the Gateway and embedding adapter's exact DeepSeek Harness target to `0.2.0-rc.2`, with first-class tool-result messages, producer-specific context sources, declarative preset registration, and v4 session persistence.
 - Updated Gateway and adapter peers to DeepSeek Harness `0.1.5-alpha.1`; live text now consumes `agent/assistant-stream`, history uses session snapshots, and Agent setup uses the explicit callback argument.
 - Resume now creates a session only for `SessionPersistenceNotFoundError`, preserving corruption and format-refusal errors.
 - Verified v3 session persistence and migration from the recorded `0.1.1-rc.2` log; file Tool results project as `[file result]`.

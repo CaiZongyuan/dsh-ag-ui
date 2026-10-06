@@ -370,7 +370,7 @@ DSH 仍处于 developer preview，可能引入 breaking changes。在这些 API 
 
 #### 模型看到什么
 
-每个非空 `RunAgentInput.context` 都会成为一条 user-role snapshot，包含有序 `## <description>` sections。Source 是 `{ kind: "plugin", plugin: "ag-ui", form: "snapshot", sections }`。
+每个非空 `RunAgentInput.context` 都会成为一条 user-role snapshot，包含有序 `## <description>` sections。Source 是 `{ kind: "ag-ui", form: "snapshot", sections }`。
 
 #### Token 影响
 
@@ -424,10 +424,10 @@ git clone https://github.com/CaiZongyuan/dsh-ag-ui.git
 cd dsh-ag-ui
 corepack enable
 pnpm install
-pnpm -r --workspace-root check
+pnpm -r --include-workspace-root check
 ```
 
-本仓库是 pnpm workspace：根 package 即 Gateway，`packages/` 下是 `dsh-ag-ui-cards` React card 渲染包与 `dsh-ag-ui-adapter` 嵌入适配包。`pnpm -r --workspace-root check` 会在每个 workspace project 内运行 lint、strict TypeScript、per-file coverage、runtime/type builds 和 publint。Dojo fixture 仅用于 source checkout，不包含在 npm tarball 中。
+本仓库是 pnpm workspace：根 package 即 Gateway，`packages/` 下是 `dsh-ag-ui-cards` React card 渲染包与 `dsh-ag-ui-adapter` 嵌入适配包。`pnpm -r --include-workspace-root check` 会在每个 workspace project 内运行 lint、strict TypeScript、per-file coverage、runtime/type builds 和 publint。Dojo fixture 仅用于 source checkout，不包含在 npm tarball 中。
 
 贡献和发布要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
