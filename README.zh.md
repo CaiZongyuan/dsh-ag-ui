@@ -159,7 +159,7 @@ GET /ag-ui/threads/:threadId/deliverables/:eventSeq/files/:fileIndex
 | `maxRunEventBytes` | `2097152` | 每个 run 最大保留 event bytes |
 | `maxRunsPerThread` | `32` | 每个 thread 保留的 run ledger entries 上限，同时也分别限制等待请求的数量 |
 
-`agentPreset` 让每个线程的 agent 从宿主的 agent-presets roster 组合而来（需在本 Gateway 之前挂载 roster 插件）；无法解析的 id 会让 Gateway 激活响亮失败，按租户条目覆盖该租户线程的部署默认值，而恢复的线程保持其持久 session 自己记录的组合。不配置 `agentPreset` 时，线程保持宿主组合不变。
+`agentPreset` 让每个线程的 agent 从宿主的 agent-preset registry 组合而来（需在本 Gateway 之前挂载 roster 插件）；无法解析的 id 会让 Gateway 激活响亮失败，按租户条目覆盖该租户线程的部署默认值，而恢复的线程保持其持久 session 自己记录的组合。不配置 `agentPreset` 时，线程保持宿主组合不变。
 
 每个 thread 使用 `<workspaceRoot>/<sessionId>` 作为 DSH working directory。目录按 durable session id 命名，客户端 thread id 不会落盘。Host 提供 `workspaceRegistry` 时，Gateway 会为 DSH Web 注册新 workspace。
 
@@ -445,9 +445,9 @@ Backend Tool result 会发出 `TOOL_CALL_RESULT`。Frontend Tool result 不在 A
 | AG-UI core/client/encoder | `>=0.0.59 <0.1.0`（`~0.0.59`；已用 `0.0.59` 验证） |
 | `dsh-ag-ui/client` companion | `@ag-ui/client ~0.0.59` |
 | Node.js | `^22.19.0` 或 `>=24.0.0` |
-| DeepSeek Harness | `0.1.5-rc.2`（精确的 developer-preview peers） |
+| DeepSeek Harness | `0.2.0-rc.2`（精确的 developer-preview peers） |
 
-DSH `0.1.5-rc.2` 使用 v3 会话日志。实时文本通过 `agent/assistant-stream` 接收，已结算历史通过 `snapshotEvents()` 读取。配置 JSONL 持久化插件后，DSH 在恢复时迁移旧日志（已用 `0.1.1-rc.2` 录制验证）。图片和文件 Tool 结果分别投影为 `[image result]` 和 `[file result]` 占位符，不传输附件字节。
+DSH `0.2.0-rc.2` 使用 v4 会话日志。实时文本通过 `agent/assistant-stream` 接收，已结算历史通过 `snapshotEvents()` 读取。配置 JSONL 持久化插件后，DSH 在恢复时迁移旧日志（已用 `0.1.1-rc.2` 录制验证）。图片和文件 Tool 结果分别投影为 `[image result]` 和 `[file result]` 占位符，不传输附件字节。
 
 DSH 仍处于 developer preview，可能引入 breaking changes。在这些 API 稳定前，本 package 使用精确 DSH peer versions。
 
@@ -457,7 +457,7 @@ DSH 仍处于 developer preview，可能引入 breaking changes。在这些 API 
 
 #### 模型看到什么
 
-每个非空 `RunAgentInput.context` 都会成为一条 user-role snapshot，包含有序 `## <description>` sections。Source 是 `{ kind: "plugin", plugin: "ag-ui", form: "snapshot", sections }`。
+每个非空 `RunAgentInput.context` 都会成为一条 user-role snapshot，包含有序 `## <description>` sections。Source 是 `{ kind: "ag-ui", form: "snapshot", sections }`。
 
 #### Token 影响
 

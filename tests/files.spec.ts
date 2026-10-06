@@ -5,7 +5,7 @@ import { request as httpRequest, type IncomingMessage, type ServerResponse } fro
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
@@ -73,7 +73,7 @@ async function expectCode(response: Response, status: number, code: string): Pro
 
 function rawRequest(
   url: string,
-  options: { method?: string, headers?: Record<string, string>, writes?: readonly Buffer[], abort?: boolean } = {},
+  options: { method?: string, headers?: Record<string, string>, writes?: readonly Buffer[], abort?: boolean, abortAfter?: Promise<void> } = {},
 ): Promise<{ status: number, body: Buffer, headers: import('node:http').IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     let settled = false
@@ -95,7 +95,7 @@ function rawRequest(
       if (options.abort === true) settle({ status: 0, body: Buffer.alloc(0), headers: {} })
     })
     for (const chunk of options.writes ?? []) request.write(chunk)
-    if (options.abort === true) setTimeout(() => request.destroy(), 10)
+    if (options.abort === true) void options.abortAfter!.then(() => request.destroy(), reject)
     else request.end()
   })
 }
@@ -175,10 +175,29 @@ describe('native thread file HTTP routes', () => {
 
   it('lets native storage clean cancelled intake and accepts its retry', async () => {
     const mounted = await mount()
+    const entered = Promise.withResolvers<void>()
+    const finished = Promise.withResolvers<void>()
+    const uploads = mounted.ctx.fileUploads
+    const uploadStream = uploads.uploadStream.bind(uploads)
+    const cancelledUpload = vi.spyOn(uploads, 'uploadStream').mockImplementationOnce(async request => {
+      async function* data() {
+        for await (const chunk of request.data) {
+          entered.resolve()
+          yield chunk
+        }
+      }
+      try {
+        return await uploadStream({ ...request, data: data() })
+      } finally {
+        finished.resolve()
+      }
+    })
     await rawRequest(`${mounted.url}/threads/thread-1/files`, {
       headers: { ...HEADERS, 'content-length': '100000', 'x-file-name': 'cancelled.txt' },
-      writes: [Buffer.alloc(100)], abort: true,
+      writes: [Buffer.alloc(100)], abort: true, abortAfter: entered.promise,
     })
+    await finished.promise
+    cancelledUpload.mockRestore()
     const retry = await upload(mounted.url, 'complete', 'cancelled.txt')
     expect(retry.status).toBe(201)
     const source = await retry.json() as { value: string }

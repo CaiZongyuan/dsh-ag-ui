@@ -1,12 +1,11 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { HttpAgent } from '@ag-ui/client'
 import { EventType, type RunAgentInput } from '@ag-ui/core'
 import { Context } from '@deepseek-ai/cordis'
-import AgentPresets from '@deepseek-ai/dsh-agent-presets'
+import AgentPresets from '@deepseek-ai/dsh-agent-preset-registry'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
@@ -28,7 +27,6 @@ import type { StreamChunk } from '@deepseek-ai/dsh-llm'
  */
 
 const SECRET = 'preset-test-shared-secret'
-const ROOT = fileURLToPath(new URL('./fixtures/presets/roots/', import.meta.url))
 const PRINCIPAL = { tenantId: 'tenant-1', userId: 'user-1' }
 
 const contexts: Context[] = []
@@ -47,8 +45,7 @@ async function mount(overrides: Partial<Config> = {}, script: StreamChunk[][] = 
   await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
   await mountTestAgentCore(ctx)
   if (withRoster) {
-    await ctx.plugin(Loader)
-    await ctx.plugin(AgentPresets, { default: 'alpha', roots: [{ path: ROOT, trust: 'system' }], includeUserRoot: false })
+    await mountPresets(ctx)
   }
   const adapter = new ScriptedAdapter(script)
   ctx.llm.registerAdapter(['scripted'], adapter)
@@ -63,6 +60,18 @@ async function mount(overrides: Partial<Config> = {}, script: StreamChunk[][] = 
     ...overrides,
   })
   return { url: `http://127.0.0.1:${String(ctx.webServer.port)}/ag-ui`, adapter, ctx }
+}
+
+async function mountPresets(ctx: Context): Promise<void> {
+  await ctx.plugin(Loader)
+  await ctx.plugin(AgentPresets, { default: 'alpha' })
+  for (const id of ['alpha', 'beta']) {
+    const dispose = await ctx.agentPresets.register({
+      id,
+      plugins: [{ id: `${id}-tool`, name: new URL(`./${id}/tool.mjs`, ctx.baseUrl).href }],
+    })
+    ctx.effect(() => dispose)
+  }
 }
 
 function agentFor(url: string, tenantId: string, threadId: string): HttpAgent {
@@ -236,8 +245,7 @@ describe('resumed threads keep their recorded composition', () => {
     first.baseUrl = new URL('./fixtures/presets/roots/', import.meta.url).href
     contexts.push(first)
     await mountTestAgentCore(first)
-    await first.plugin(Loader)
-    await first.plugin(AgentPresets, { default: 'alpha', roots: [{ path: ROOT, trust: 'system' }], includeUserRoot: false })
+    await mountPresets(first)
     first.llm.registerAdapter(['scripted'], new ScriptedAdapter([textResponse('alpha turn done.')]))
     await first.plugin(JsonlSessionPersistence, { root, compression: 'none' })
     const workspaceRoot = join(root, 'workspaces')
@@ -266,8 +274,7 @@ describe('resumed threads keep their recorded composition', () => {
     second.baseUrl = new URL('./fixtures/presets/roots/', import.meta.url).href
     contexts.push(second)
     await mountTestAgentCore(second)
-    await second.plugin(Loader)
-    await second.plugin(AgentPresets, { default: 'alpha', roots: [{ path: ROOT, trust: 'system' }], includeUserRoot: false })
+    await mountPresets(second)
     second.llm.registerAdapter(['scripted'], new ScriptedAdapter([
       toolCallsResponse([{ callId: 'resumed-call-1', name: 'preset_beta_probe', args: { probe: 'resumed' } }]),
       textResponse('beta still composes the resumed thread.'),

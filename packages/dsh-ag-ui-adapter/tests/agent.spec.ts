@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { randomUUID, RunAgentInputSchema, type RunAgentInput } from '@ag-ui/client'
+import { EventType, type BaseEvent } from '@ag-ui/core'
 import { DshAgent } from '../src/agent.ts'
 import { MODEL_ENV, PROVIDER_ENV } from '../src/config.ts'
 import { AGENT_CORE_ROWS, SCRIPTED_MODEL_ROW } from './rows.ts'
@@ -42,6 +43,41 @@ class InspectableDshAgent extends DshAgent {
 }
 
 describe('DshAgent', () => {
+  it('preserves successful, failed, and empty tool results through the spawned micro-host', async () => {
+    const agent = scriptedAgent()
+    const events: BaseEvent[] = []
+    agent.addMessage({ id: randomUUID(), role: 'user', content: 'Probe tool results.' })
+    await agent.runAgent({ runId: randomUUID(), tools: [], context: [], forwardedProps: {} }, {
+      onEvent: ({ event }) => { events.push(event) },
+    })
+
+    expect(agent.messages.filter(message => message.role === 'tool')).toEqual([
+      expect.objectContaining({ toolCallId: 'adapter-success', content: 'Synthetic probe success' }),
+      expect.objectContaining({ toolCallId: 'adapter-error', content: expect.stringContaining('Synthetic probe failure') }),
+      expect.objectContaining({ toolCallId: 'adapter-empty', content: '' }),
+    ])
+    expect(events.filter(event => event.type === EventType.TOOL_CALL_RESULT)).toHaveLength(3)
+    expect(events.filter(event => event.type === EventType.CUSTOM && 'name' in event && event.name === 'dsh:tool:view')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ value: expect.objectContaining({
+        callId: 'adapter-success',
+        phase: 'result',
+        card: expect.objectContaining({ title: 'Probe completed', content: [{ type: 'text', text: 'Synthetic probe success' }] }),
+      }) }),
+      expect.objectContaining({ value: expect.objectContaining({
+        callId: 'adapter-error',
+        phase: 'result',
+        card: expect.objectContaining({ title: 'Probe failed' }),
+      }) }),
+      expect.objectContaining({ value: expect.objectContaining({
+        callId: 'adapter-empty',
+        phase: 'result',
+        card: expect.objectContaining({ title: 'Probe completed', content: [] }),
+      }) }),
+    ]))
+    expect(assistantText(agent)).toBe('Tool probes completed.')
+    await agent.stop()
+  })
+
   it('omits presentation messages while retaining all user input', () => {
     const agent = new InspectableDshAgent({
       threadId: 'adapter-thread',
@@ -143,7 +179,7 @@ describe('DshAgent', () => {
     }
   })
 
-  it('shuts the host down after an idle window and spawns a fresh one on the next run', async () => {
+  it('keeps a slow first run alive, then shuts down when idle and spawns a fresh host', async () => {
     const agent = new DshAgent({
       threadId: 'adapter-thread',
       gateway: { provider: 'scripted', model: 'scripted' },
@@ -151,7 +187,7 @@ describe('DshAgent', () => {
       idleShutdownMs: 150,
     })
     agents.push(agent)
-    await ask(agent, 'My name is Ada.')
+    await ask(agent, 'Reply slowly. My name is Ada.')
     expect(assistantText(agent)).toBe('Hello Ada.')
     await vi.waitFor(() => {
       expect(() => agent.url).toThrow('has not started')

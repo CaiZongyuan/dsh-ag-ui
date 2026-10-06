@@ -4,7 +4,7 @@
  */
 
 import { EventType, type CustomEvent } from '@ag-ui/core'
-import type { ContentBlock, ToolResultBlock } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, ToolResultMessage } from '@deepseek-ai/dsh-llm'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { ToolCallView, ToolDefinition, ToolResultView } from '@deepseek-ai/dsh-tools'
 
@@ -55,9 +55,9 @@ export function parseToolArguments(raw: string): unknown {
 }
 
 /** Assemble the durable outcome one present-result intent reads, from its logged copy. */
-export function toolViewResultOf(block: ToolResultBlock, meta: JsonValue | undefined): ToolViewResult {
+export function toolViewResultOf(block: ToolResultMessage, meta: JsonValue | undefined): ToolViewResult {
   return {
-    content: block.content,
+    content: [...block.content],
     isError: block.isError === true,
     ...(meta === undefined ? {} : { meta }),
   }

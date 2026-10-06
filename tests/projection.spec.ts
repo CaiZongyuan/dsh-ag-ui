@@ -191,6 +191,49 @@ describe('SessionProjection tool calls', () => {
     expect(projection.consumeServerResult('call-1')).toBe(false)
   })
 
+  it('retains the call identity of an empty tool-role result in live and recovered history', () => {
+    const projection = new SessionProjection(sessionId, presenter)
+    const result = event('tool/result', {
+      turn: 1,
+      step: 1,
+      message: createToolResultMessage({ callId: ToolCallId('empty-result'), isError: false, content: [] }),
+    })
+    expect(projection.project(result, 1).events).toEqual([{
+      type: EventType.TOOL_CALL_RESULT,
+      messageId: 'ag-ui:ag-ui-projection-test:empty-result:result',
+      toolCallId: 'empty-result',
+      content: '',
+      role: 'tool',
+    }])
+    expect(projection.messagesSnapshot([result], () => undefined)).toEqual([{
+      id: 'ag-ui:ag-ui-projection-test:empty-result:result',
+      toolCallId: 'empty-result',
+      content: '',
+      role: 'tool',
+    }])
+    const resumed = new SessionProjection(sessionId, presenter)
+    resumed.recoverFrom([result])
+    expect(resumed.consumeServerResult('empty-result')).toBe(true)
+  })
+
+  it('falls through extensible content blocks without treating them as nested results', () => {
+    const projection = new SessionProjection(sessionId, presenter)
+    const result = projection.project(event('tool/result', {
+      turn: 1,
+      step: 1,
+      message: createToolResultMessage({
+        callId: ToolCallId('extensible-result'),
+        isError: false,
+        content: [{ type: 'tool-addition', toolName: 'added_tool' }],
+      }),
+    }), 1)
+    expect(result.events).toContainEqual(expect.objectContaining({
+      type: EventType.TOOL_CALL_RESULT,
+      toolCallId: 'extensible-result',
+      content: '[tool-addition result]',
+    }))
+  })
+
   it('records the reserved state call without wire events', () => {
     const projection = new SessionProjection(sessionId, presenter, (seq, index) => `/files/${seq}/${index}`)
     const call = projection.project(toolCall('state-call', STATE_TOOL_NAME), 1)

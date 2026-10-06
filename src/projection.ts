@@ -9,7 +9,7 @@ import {
 } from '@ag-ui/core'
 import { deliverableMessage, isPresentedEvent } from './deliverables.ts'
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
-import type { ContentBlock, ToolResultBlock, UserMessage } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, ToolResultMessage, UserMessage } from '@deepseek-ai/dsh-llm'
 import { isAppendSurfaceEvent, type SessionId, type SessionEvent, type TurnEndReason } from '@deepseek-ai/dsh-session'
 import { projectedResultMeta } from './frontend-result.ts'
 import {
@@ -59,7 +59,7 @@ export function consumedMessages(events: readonly SessionEvent[]): readonly User
 
 /** Use the same public result fields for transcript projection and recovered admission checks. */
 function projectedToolResult(sessionId: SessionId, event: Extract<SessionEvent, { type: 'tool/result' }>): AgUiToolMessage {
-  const block = event.data.message.content[0]
+  const block = event.data.message
   const callId = String(block.toolCallId)
   const { id, metadata, ...identity } = projectedResultMeta(event.data.meta)
   return {
@@ -246,7 +246,7 @@ export class SessionProjection {
         }
       }
       case 'tool/result': {
-        const block = event.data.message.content[0]
+        const block = event.data.message
         const callId = String(block.toolCallId)
         const lifecycle = this.toolCallLifecycles.get(callId)
         this.toolCallLifecycles.delete(callId)
@@ -364,7 +364,7 @@ export class SessionProjection {
     const frontendResults: AgUiToolMessage[] = []
     for (const event of events) {
       if (event.type === 'tool/result') {
-        this.serverResultCallIds.add(String(event.data.message.content[0].toolCallId))
+        this.serverResultCallIds.add(String(event.data.message.toolCallId))
         if (projectedResultMeta(event.data.meta).id !== undefined) {
           frontendResults.push(projectedToolResult(this.sessionId, event))
         }
@@ -434,7 +434,7 @@ export class SessionProjection {
           ...(toolCalls.length === 0 ? {} : { toolCalls }),
         })
       } else if (event.type === 'tool/result') {
-        const block = event.data.message.content[0]
+        const block = event.data.message
         const callId = String(block.toolCallId)
         if (stateCalls.has(callId)) continue
         messages.push(projectedToolResult(this.sessionId, event))
@@ -461,7 +461,7 @@ export class SessionProjection {
       if (event.type === 'tool/call') {
         calls.set(String(event.data.callId), { toolName: event.data.name, args: parseToolArguments(event.data.arguments) })
       } else if (event.type === 'tool/result' && isAppendSurfaceEvent(event)) {
-        const block = event.data.message.content[0]
+        const block = event.data.message
         const callId = String(block.toolCallId)
         const call = calls.get(callId)
         if (call === undefined) continue
@@ -550,7 +550,7 @@ function turnOutcome(reason: TurnEndReason): RunOutcome {
 }
 
 /** Flatten DSH model-facing Tool content into the AG-UI string result field. */
-function renderToolResult(block: ToolResultBlock): string {
+function renderToolResult(block: ToolResultMessage): string {
   const text: string[] = []
   for (const content of block.content) {
     if (content.type === 'text') text.push(content.text)
@@ -558,7 +558,7 @@ function renderToolResult(block: ToolResultBlock): string {
     else if (content.type === 'image') text.push('[image result]')
     else if (content.type === 'file') text.push('[file result]')
     else if (content.type === 'tool-call') text.push(`[nested tool call: ${content.name}]`)
-    else text.push(renderToolResult(content))
+    else text.push(`[${content.type} result]`)
   }
   return text.join('\n')
 }

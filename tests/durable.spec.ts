@@ -1,3 +1,4 @@
+import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
@@ -60,7 +61,7 @@ describe('Durable session binding across a killed process', () => {
     await ask(agent, 'durable-user-1', 'durable-run-1', 'Set the codeword.', [])
     expect(lastAssistantText(agent.messages)).toBe('The codeword is pine-cone-7.')
 
-    await drainThenKill(first.child)
+    await drainThenKill(first)
     const log = await readSessionLog(root, CHAT_THREAD)
     expect(log).toContain('pine-cone-7')
     expect(log).toContain('ag-ui:user:durable-user-1')
@@ -94,7 +95,7 @@ describe('Durable session binding across a killed process', () => {
     expect(pendingTool(agent.messages, NOTE_TOOL.name)?.function.name).toBe(NOTE_TOOL.name)
     expect(lastAssistantText(agent.messages)).toBeUndefined()
 
-    await drainThenKill(first.child)
+    await drainThenKill(first)
     const log = await readSessionLog(root, CRASH_THREAD)
     expect(log).toContain('fixture-draft-note')
 
@@ -149,11 +150,12 @@ async function launch(root: string): Promise<Host> {
   return { child, base }
 }
 
-/** Let the write-behind window close, then terminate without any cleanup. */
-async function drainThenKill(child: ChildProcessWithoutNullStreams): Promise<void> {
-  await new Promise(resolve => setTimeout(resolve, 600))
-  child.kill('SIGKILL')
-  await once(child, 'exit')
+/** Establish native durability, then terminate without process cleanup. */
+async function drainThenKill(host: Host): Promise<void> {
+  const response = await fetch(`${host.base}/flush`, { method: 'POST', headers: HEADERS })
+  expect(response.status).toBe(204)
+  host.child.kill('SIGKILL')
+  await once(host.child, 'exit')
 }
 
 async function sessionLogPath(root: string, threadId: string): Promise<string> {
@@ -163,7 +165,7 @@ async function sessionLogPath(root: string, threadId: string): Promise<string> {
     if (!project.isDirectory()) continue
     const entries = await readdir(join(root, project.name), { withFileTypes: true })
     const match = entries.find(entry => entry.isDirectory() && entry.name === sessionId)
-    if (match !== undefined) return join(root, project.name, match.name, 'session.v3.jsonl')
+    if (match !== undefined) return join(root, project.name, match.name, `session.v${SESSION_FORMAT_VERSION}.jsonl`)
   }
   throw new Error(`no persisted session for ${threadId} under ${root}`)
 }
@@ -186,7 +188,7 @@ it('does not restore a human Promise after SIGKILL and accepts cancellation of t
   const terminal = RunFinishedEventSchema.parse(JSON.parse(opened.trim().split('data: ').at(-1)!))
   if (terminal.outcome?.type !== 'interrupt') throw new Error('Expected a human interrupt')
   const interruptId = terminal.outcome.interrupts[0]!.id
-  await drainThenKill(first.child)
+  await drainThenKill(first)
   expect(await readSessionLog(root, threadId)).toContain('fixture-question')
   const second = await launch(root)
   const stale = await post(second, body('stale', { resume: [{ interruptId, status: 'resolved', payload: { answers: [{ id: 'confirm', selected: [], custom: 'yes' }] } }] }))

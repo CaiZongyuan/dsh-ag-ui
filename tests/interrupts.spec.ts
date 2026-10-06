@@ -359,8 +359,8 @@ it.each([false, true])('commits concurrent shared-state work after a human inter
     await reserved.done
   }
   const stateResult = binding.liveAgent.session.snapshotEvents().filter(event => event.type === 'tool/result')
-    .find(event => event.data.message.content[0].toolCallId === 'state-parallel')
-  expect(stateResult?.data.message.content[0]).toMatchObject({ isError: false, content: [{ type: 'text', text: JSON.stringify({ status: 'updated', state: { value: 1 } }) }] })
+    .find(event => event.data.message.toolCallId === 'state-parallel')
+  expect(stateResult?.data.message).toMatchObject({ isError: false, content: [{ type: 'text', text: JSON.stringify({ status: 'updated', state: { value: 1 } }) }] })
   const history = await run(binding, input('history'))
   expect(history.find(event => event.type === EventType.STATE_SNAPSHOT)).toMatchObject({ snapshot: { value: 1 } })
 })
@@ -402,6 +402,6 @@ it('parks a late frontend call while the human continuation is reserved but not 
   await controller.done
   await run(binding, input('frontend-answer', { messages: [{ id: 'frontend-result', role: 'tool', toolCallId: 'frontend-call', content: 'chosen' }] }))
   const result = binding.liveAgent.session.snapshotEvents().filter(event => event.type === 'tool/result')
-    .find(event => event.data.message.content[0].toolCallId === 'frontend-call')
-  expect(result?.data.message.content[0]).toMatchObject({ isError: false, content: [{ type: 'text', text: 'chosen' }] })
+    .find(event => event.data.message.toolCallId === 'frontend-call')
+  expect(result?.data.message).toMatchObject({ isError: false, content: [{ type: 'text', text: 'chosen' }] })
 })

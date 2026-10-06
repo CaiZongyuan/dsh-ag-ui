@@ -1,5 +1,5 @@
 import type {} from '@deepseek-ai/dsh-fs'
-import type {} from '@deepseek-ai/dsh-agent-presets'
+import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import { isPresentedEvent } from './deliverables.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import { mkdir, realpath } from 'node:fs/promises'
@@ -20,7 +20,7 @@ import type {
   AttachmentAdmissionPart,
   FileAttachmentRef,
 } from '@deepseek-ai/dsh-attachment'
-import { createUserMessage, errorChain, freezeMessage, MessageId, ToolCallId, type UserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, errorChain, freezeMessage, MessageId, ToolCallId, type UserMessage, type ContextFormed } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-projection'
@@ -44,6 +44,12 @@ import { PendingInterrupts, type PreparedResume } from './interrupts.ts'
 import { RunController, type RunRecord } from './run.ts'
 import type { ToolPresenter } from './tool-view.ts'
 import type { AgUiPrincipal, AgUiThreadIdentity } from './types.ts'
+
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'ag-ui': { readonly kind: 'ag-ui' } & ContextFormed
+  }
+}
 
 export type RunAdmission = RunController | { replay: RunRecord }
 
@@ -992,8 +998,7 @@ export class ThreadBinding {
         text: `${action.result.content}\n\nA2UI user action JSON: ${canonicalJsonStringify(action.action)}`,
       }],
       source: {
-        kind: 'plugin',
-        plugin: 'ag-ui',
+        kind: 'ag-ui',
         form: 'notice',
         summary: 'A2UI user action',
       },
@@ -1058,7 +1063,7 @@ export class ThreadBinding {
     const text = sections.map(section => `## ${section.name}\n${section.text}`).join('\n\n')
     this.liveAgent.inject(createUserMessage({
       content: [{ type: 'text', text }],
-      source: { kind: 'plugin', plugin: 'ag-ui', form: 'snapshot', sections },
+      source: { kind: 'ag-ui', form: 'snapshot', sections },
     }))
   }
 

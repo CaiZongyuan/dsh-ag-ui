@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { fileURLToPath } from 'node:url'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
-import AgentPresets from '@deepseek-ai/dsh-agent-presets'
+import AgentPresets from '@deepseek-ai/dsh-agent-preset-registry'
 import { join, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { HttpAgent } from '@ag-ui/client'
@@ -44,8 +43,12 @@ async function mount(root?: string, maxFileBytes = 1024, filePath = 'report.txt'
   if (isolatedPreset) {
     ctx.baseUrl = new URL('./fixtures/presets/roots/', import.meta.url).href
     await ctx.plugin(Loader)
-    await ctx.plugin(AgentPresets, { default: 'deliverables', includeUserRoot: false,
-      roots: [{ path: fileURLToPath(new URL('./fixtures/presets/roots/', import.meta.url)), trust: 'system' }] })
+    await ctx.plugin(AgentPresets, { default: 'deliverables' })
+    const dispose = await ctx.agentPresets.register({
+      id: 'deliverables',
+      plugins: [{ id: 'isolated-deliverables', name: new URL('./deliverables/provider.mjs', ctx.baseUrl).href, isolate: { fs: true } }],
+    })
+    ctx.effect(() => dispose)
   } else {
     await ctx.plugin(Present, { maxFiles: 8 })
   }

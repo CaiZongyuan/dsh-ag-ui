@@ -330,10 +330,11 @@ describe('AG-UI gateway lifecycle', () => {
     const first = post(url, input())
     const second = post(url, input())
     const results = await Promise.all([first, second])
-    expect(results[0]?.status).toBe(200)
-    // A duplicate arriving before completion reports RUN_IN_PROGRESS on the base Gateway.
-    expect([200, 409]).toContain(results[1]?.status)
-    expect((await post(url, input())).body).toBe(results[0]?.body)
+    const completed = results.find(result => result.status === 200)
+    expect(completed).toBeDefined()
+    // Either concurrent request can arrive first; the duplicate may complete by replay or report RUN_IN_PROGRESS.
+    expect(results.every(result => result.status === 200 || result.status === 409)).toBe(true)
+    expect((await post(url, input())).body).toBe(completed?.body)
     expect(ctx.agents.list()).toHaveLength(1)
   })
 

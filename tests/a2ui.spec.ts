@@ -85,15 +85,15 @@ describe('official A2UI middleware contract', () => {
     expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'turn/start')).toHaveLength(2)
     expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'turn/end')).toHaveLength(2)
     expect(harness.adapter.requests).toHaveLength(3)
-    expect(harness.adapter.requests[1]?.messages.some(message => message.content.some(block =>
-      block.type === 'tool-result' && block.content.some(content =>
-        content.type === 'text' && content.text.includes('rendered'))))).toBe(true)
+    expect(harness.adapter.requests[1]?.messages.some(message => message.role === 'tool'
+      && message.content.some(content =>
+        content.type === 'text' && content.text.includes('rendered')))).toBe(true)
     expect(harness.adapter.requests[2]?.messages.some(message => message.content.some(block =>
       block.type === 'text' && block.text.includes('User performed action "refresh" on surface "overview"')))).toBe(true)
     expect(harness.adapter.requests[2]?.messages.some(message => message.content.some(block =>
       block.type === 'text' && block.text.includes(`A2UI user action JSON: ${canonicalAction}`)))).toBe(true)
     expect(dshAgent?.session.snapshotEvents().some(event => event.type === 'user/message'
-      && event.data.source.kind === 'plugin'
+      && event.data.source.kind === 'ag-ui'
       && event.data.source.form === 'notice'
       && event.data.source.summary === 'A2UI user action'
       && event.data.content.some(block => block.type === 'text'
@@ -225,7 +225,7 @@ describe('official A2UI middleware contract', () => {
       block.type === 'text' && block.text === durableText))).toBe(true)
     expect(harness.ctx.agents.list()[0]?.session.snapshotEvents().some(event =>
       event.type === 'user/message'
-      && event.data.source.kind === 'plugin'
+      && event.data.source.kind === 'ag-ui'
       && event.data.content.some(block => block.type === 'text' && block.text === durableText))).toBe(true)
   })
 

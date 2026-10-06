@@ -776,7 +776,7 @@ describe('ThreadBinding frontend Tools', () => {
     await result.done
     expect(result.record.events.some(event => event.type === EventType.TOOL_CALL_RESULT)).toBe(false)
     expect(binding.liveAgent.session.snapshotEvents().some(event => event.type === 'tool/result'
-      && event.data.message.content[0].isError === true)).toBe(true)
+      && event.data.message.isError === true)).toBe(true)
     expect(result.record.events.at(-1)?.type).toBe(EventType.RUN_FINISHED)
     const snapshot = new SessionProjection(binding.sessionId, { resolve: () => undefined, isFrontendTool: () => false })
       .messagesSnapshot(binding.liveAgent.session.snapshotEvents(), () => undefined)
@@ -888,13 +888,12 @@ describe('ThreadBinding frontend Tools', () => {
     await binding.liveAgent.whenIdle()
 
     const durable = binding.liveAgent.session.snapshotEvents().find(event => event.type === 'tool/result'
-      && String(event.data.message.content[0].toolCallId) === 'call-metadata')
+      && String(event.data.message.toolCallId) === 'call-metadata')
     expect(durable).toMatchObject({ data: { meta: metadata } })
-    expect(durable?.data.message.content[0].content).toEqual([{ type: 'text', text: 'browser-rendered' }])
-    expect(adapter.requests[1]?.messages.some(message => message.content.some(block =>
-      block.type === 'tool-result'
-      && String(block.toolCallId) === 'call-metadata'
-      && block.content.some(content => content.type === 'text' && content.text === 'browser-rendered')))).toBe(true)
+    expect(durable?.data.message.content).toEqual([{ type: 'text', text: 'browser-rendered' }])
+    expect(adapter.requests[1]?.messages.some(message => message.role === 'tool'
+      && String(message.toolCallId) === 'call-metadata'
+      && message.content.some(content => content.type === 'text' && content.text === 'browser-rendered'))).toBe(true)
   })
 
   it('rejects non-lossless frontend Tool metadata before settling the pending call', async () => {
@@ -961,8 +960,8 @@ describe('ThreadBinding frontend Tools', () => {
     await controller.done
     await binding.liveAgent.whenIdle()
     expect(binding.liveAgent.session.snapshotEvents().some(event => event.type === 'tool/result'
-      && event.data.message.content[0].isError === true
-      && event.data.message.content[0].content.some(content => content.type === 'text'
+      && event.data.message.isError === true
+      && event.data.message.content.some(content => content.type === 'text'
         && content.text.includes('Invalid frontend Tool arguments')))).toBe(true)
     expect(controller.record.events).toContainEqual(expect.objectContaining({
       type: EventType.TOOL_CALL_RESULT,
@@ -979,7 +978,7 @@ describe('ThreadBinding frontend Tools', () => {
     await vi.advanceTimersByTimeAsync(50)
     await binding.liveAgent.whenIdle()
     expect(binding.liveAgent.session.snapshotEvents().some(event => event.type === 'tool/result'
-      && event.data.message.content[0].isError === true)).toBe(true)
+      && event.data.message.isError === true)).toBe(true)
   })
 
   it('detects a later global Tool collision while a frontend call is pending', async () => {
@@ -995,6 +994,28 @@ describe('ThreadBinding frontend Tools', () => {
 })
 
 describe('ThreadBinding shared state', () => {
+  it('attributes client context and shared state to the AG-UI snapshot producer', async () => {
+    const { adapter, binding } = await mount([textResponse('context received')])
+    const controller = binding.reserveRun({
+      ...input('source-run', [{ id: 'source-user', role: 'user', content: 'Read the context.' }]),
+      context: [{ description: 'Current page', value: 'Synthetic triage queue' }],
+      state: { selection: 'synthetic-case' },
+    }, 'source-digest')
+    binding.drive(controller)
+    await controller.done
+    expect(adapter.requests[0]?.messages.find(message => message.source.kind === 'ag-ui')).toMatchObject({
+      role: 'user',
+      source: {
+        kind: 'ag-ui',
+        form: 'snapshot',
+        sections: [
+          { name: 'Current page', text: 'Synthetic triage queue' },
+          { name: 'Current Shared State', text: expect.stringContaining('synthetic-case') },
+        ],
+      },
+    })
+  })
+
   it('activates once, accepts later baselines, and presents the reserved Tool', async () => {
     const { ctx, binding } = await mount([
       textResponse('inactive'),
@@ -1155,7 +1176,7 @@ describe('ThreadBinding shared state', () => {
       ])
       expect(controller.record.events.at(-1)).toMatchObject({ code: 'AG_UI_EVENT_BUFFER_OVERFLOW' })
       expect(fixture.binding.liveAgent.session.snapshotEvents().some(event => event.type === 'tool/result'
-        && event.data.message.content[0].isError === true)).toBe(true)
+        && event.data.message.isError === true)).toBe(true)
     }
   })
 
@@ -1419,7 +1440,7 @@ describe('ThreadBinding session projection', () => {
     const result = session.append('tool/result', { turn: 1, step: 1, message: createToolResultMessage({ callId: ToolCallId('kept'), isError: false, content: [{ type: 'text', text: 'Visible result' }] }) }, { surfaceOp: 'append' })
     session.append('step/end', { turn: 1, step: 1 })
     session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
-    session.append('tool/result', { ...result.data, message: { ...result.data.message, content: [{ ...result.data.message.content[0], content: [{ type: 'text', text: 'Model-only summary' }] }] } }, { surfaceOp: { op: 'replace', startSeq: result.seq, endSeq: result.seq }, sourceEventSeqs: [result.seq] })
+    session.append('tool/result', { ...result.data, message: { ...result.data.message, content: [{ type: 'text', text: 'Model-only summary' }] } }, { surfaceOp: { op: 'replace', startSeq: result.seq, endSeq: result.seq }, sourceEventSeqs: [result.seq] })
     expect(session.deriveMessages()).toHaveLength(2)
     const read = binding.reserveRun(input('read-replaced', []), 'read-replaced-digest')
     binding.drive(read)
@@ -1527,11 +1548,6 @@ describe('ThreadBinding session projection', () => {
     const controller = binding.reserveRun(input('run-result', [{ id: 'message-result', role: 'user', content: 'hello' }]), 'digest')
     claimTurn(binding, controller, 1)
     controller.start()
-    const nested = createToolResultMessage({
-      callId: ToolCallId('nested-result'),
-      isError: false,
-      content: [{ type: 'text', text: 'nested text' }],
-    }).content[0]
     const result = createToolResultMessage({
       callId: ToolCallId('server-result'),
       isError: false,
@@ -1550,7 +1566,7 @@ describe('ThreadBinding session projection', () => {
         },
         { type: 'file', attachment: { attachmentId: 'test-file' as never, mediaType: 'application/pdf', bytes: 5, name: 'test.pdf' } },
         { type: 'tool-call', id: ToolCallId('nested-call'), name: 'nested_tool', arguments: '{}' },
-        nested,
+        { type: 'text', text: 'second text' },
       ],
     })
     binding.liveAgent.session.append('turn/start', { turn: 1 })
@@ -1562,7 +1578,7 @@ describe('ThreadBinding session projection', () => {
     await controller.done
     const projected = controller.record.events.find(event => event.type === EventType.TOOL_CALL_RESULT)
     expect(projected).toMatchObject({
-      content: 'plain text\nreasoning text\n[image result]\n[file result]\n[nested tool call: nested_tool]\nnested text',
+      content: 'plain text\nreasoning text\n[image result]\n[file result]\n[nested tool call: nested_tool]\nsecond text',
     })
   })
 

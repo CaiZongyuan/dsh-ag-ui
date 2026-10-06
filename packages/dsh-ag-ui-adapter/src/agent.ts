@@ -132,6 +132,8 @@ export class DshAgent extends AbstractAgent {
     const httpEvents = runHttpRequest(async () => {
       this.disarmIdleTimer()
       await this.ensureStarted()
+      // Lazy startup arms the pre-warm timer; this subscription now owns an active run.
+      this.disarmIdleTimer()
       return await fetch(this.url, this.requestInit(input))
     })
     return transformHttpEventStream(httpEvents).pipe(finalize(() => this.armIdleTimer()))

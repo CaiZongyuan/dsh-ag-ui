@@ -1,4 +1,5 @@
-import { LlmAdapter } from '@deepseek-ai/dsh-llm'
+import { LlmAdapter, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { setTimeout as delay } from 'node:timers/promises'
 
 /**
  * Keyless deterministic model for the adapter's end-to-end specs: a scripted
@@ -12,7 +13,23 @@ class AdapterScriptedModel extends LlmAdapter {
   }
 
   async *stream(request) {
+    if (request.messages.some(message => message.content.some(block => block.type === 'text' && block.text === 'Probe tool results.'))) {
+      if (request.messages.some(message => message.source.kind === 'tool')) {
+        yield * text('Tool probes completed.')
+      } else {
+        for (const [index, outcome] of ['success', 'error', 'empty'].entries()) {
+          const id = ToolCallId(`adapter-${outcome}`)
+          const args = JSON.stringify({ outcome })
+          yield { type: 'block-start', index, blockType: 'tool-call' }
+          yield { type: 'tool-call-delta', index, id, name: 'adapter_result_probe', argumentsDelta: args }
+          yield { type: 'block-end', index, block: { type: 'tool-call', id, name: 'adapter_result_probe', arguments: args } }
+        }
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+      }
+      return
+    }
     const latestUser = readLatestUserText(request.messages)
+    if (latestUser.startsWith('Reply slowly.')) await delay(300)
     if (/what is my name/i.test(latestUser)) {
       const named = JSON.stringify(request.messages).match(/my name is ([A-Za-z]+)/i)
       yield * text(named ? `Your name is ${named[1]}.` : 'You have not told me your name.')
@@ -43,8 +60,32 @@ function * text(value) {
 }
 
 export const name = 'dsh-ag-ui-adapter/scripted-model'
-export const inject = ['llm']
+export const inject = ['llm', 'tools']
 
 export function apply(ctx) {
   ctx.llm.registerAdapter(['scripted'], new AdapterScriptedModel())
+  ctx.effect(() => ctx.tools.register({
+    name: 'adapter_result_probe',
+    description: 'Return a synthetic successful, failed, or empty tool result.',
+    parameters: {
+      type: 'object',
+      properties: { outcome: { type: 'string', enum: ['success', 'error', 'empty'] } },
+      required: ['outcome'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => value === '' ? [] : [{ type: 'text', text: value }],
+    },
+    isConcurrencySafe: () => true,
+    execute: async ({ outcome }) => {
+      if (outcome === 'error') throw new Error('Synthetic probe failure')
+      return outcome === 'empty' ? '' : 'Synthetic probe success'
+    },
+    presentResult: (_args, result) => ({
+      card: 'generic',
+      title: result.isError ? 'Probe failed' : 'Probe completed',
+      content: result.content,
+    }),
+  }), 'adapter.result.probe')
 }
