@@ -1,5 +1,8 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { createServer } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { firstValueFrom, from } from 'rxjs'
 import { toArray } from 'rxjs/operators'
 import { verifyEvents, type HttpAgent, type Message, type Tool, type ToolCall } from '@ag-ui/client'
@@ -7,6 +10,7 @@ import { EventType, type BaseEvent, type CustomEvent } from '@ag-ui/core'
 import { Context } from '@deepseek-ai/cordis'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
+import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { expect } from 'vitest'
 import AgUiGateway, { TOOL_VIEW_NAME } from 'dsh-ag-ui'
@@ -83,10 +87,12 @@ export function lastAssistantText(messages: Message[]): string | undefined {
 }
 
 const mounted: Context[] = []
+const workspaceRoots: string[] = []
 
 /** Dispose every context mounted through this module; call from afterEach. */
 export async function disposeMountedContexts(): Promise<void> {
   for (const ctx of mounted.splice(0).reverse()) await ctx.fiber.dispose()
+  await Promise.all(workspaceRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 }
 
 /** Standard resource limits shared by the in-process gateway specs. */
@@ -111,6 +117,10 @@ export interface GatewayMountOptions {
   readonly tools?: readonly ToolDefinition[]
   /** Resource-limit overrides for specs that record larger event streams. */
   readonly limits?: { maxRunEvents: number, maxRunEventBytes: number }
+  /** Optional stable workspace root shared by process-lifetime recovery tests. */
+  readonly workspaceRoot?: string
+  /** Optional durable JSONL root shared by process-lifetime recovery tests. */
+  readonly persistenceRoot?: string
 }
 
 /** Mount one loopback WebServer, test Agent core, scripted model, and Gateway. */
@@ -123,13 +133,19 @@ export async function mountGateway(
   mounted.push(ctx)
   await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
   await mountTestAgentCore(ctx, options.persona)
+  if (options.persistenceRoot !== undefined) {
+    await ctx.plugin(JsonlSessionPersistence, { root: options.persistenceRoot, compression: 'none' })
+  }
   for (const tool of options.tools ?? []) ctx.tools.register(tool)
   const adapter = new ScriptedAdapter(script)
   ctx.llm.registerAdapter(['scripted'], adapter)
+  const workspaceRoot = options.workspaceRoot ?? (options.persistenceRoot === undefined ? await mkdtemp(join(tmpdir(), 'ag-ui-workspaces-')) : join(options.persistenceRoot, 'workspaces'))
+  if (options.workspaceRoot === undefined && options.persistenceRoot === undefined) workspaceRoots.push(workspaceRoot)
   const gateway = await ctx.plugin(AgUiGateway, {
     provider: 'scripted',
     model: 'scripted',
     sharedSecret: secret,
+    workspaceRoot,
     ...STANDARD_LIMITS,
     ...options.limits,
   })

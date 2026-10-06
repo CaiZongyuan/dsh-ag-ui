@@ -5,18 +5,21 @@
 
 import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { resolve } from 'node:path'
 import { EventType, RunAgentInputSchema, type RunAgentInput } from '@ag-ui/core'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { dshHomePath, expandHomePath } from '@deepseek-ai/dsh-home-paths'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-tools'
 import { AgUiGatewayError, publicError } from './errors.ts'
+import { createFileRoute, verifiedFileUrl } from './files.ts'
 import { jsonBytes, jsonDepth, requestDigest, utf8Bytes } from './json.ts'
 import { agentPresetsOf } from './presets.ts'
 import { replayRun } from './run.ts'
 import { durableSessionId } from './session-id.ts'
-import { ThreadBinding, type ThreadOptions } from './thread.ts'
+import { ThreadBinding, type RunAdmission, type ThreadOptions } from './thread.ts'
 import type { AgUiAgentLookup, AgUiPrincipal, AgUiThreadIdentity } from './types.ts'
 
 export type { AgUiAgentLookup, AgUiPrincipal, AgUiThreadIdentity } from './types.ts'
@@ -29,16 +32,20 @@ const IDENTITY = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/
 
 /** AG-UI HTTP, identity, lifecycle, and resource limits. */
 export interface Config {
-  /** Exact HTTP route. */
+  /** Base HTTP route for runs and thread files. */
   path?: string
   /** Provider route for Gateway-created Agents. */
   provider: string
   /** Model id for Gateway-created Agents. */
   model: string
+  /** Root directory containing one workspace per thread. */
+  workspaceRoot?: string
   /** Deployment-default preset id composed into every thread without a tenant override. */
   agentPreset?: string
   /** Per-tenant preset ids taking precedence over {@link Config.agentPreset}. */
   tenantPresets?: Record<string, string>
+  /** Presets each authenticated tenant may select for a blank thread. No grants by default. */
+  selectableAgentPresets?: Record<string, string[]>
   /** Bearer secret shared only with the trusted BFF. */
   sharedSecret: string
   /** Header carrying the BFF-authenticated tenant id. */
@@ -49,12 +56,16 @@ export interface Config {
   allowNonLoopback?: boolean
   /** Maximum request body bytes. */
   maxRequestBytes?: number
+  /** Maximum raw bytes in one uploaded file. */
+  maxFileBytes?: number
   /** Maximum bytes in each identity or AG-UI id. */
   maxIdentityBytes?: number
   /** Maximum messages retained in one AG-UI request. */
   maxMessages?: number
   /** Maximum combined message JSON bytes. */
   maxMessageBytes?: number
+  /** Maximum non-text content parts in one user message. */
+  maxFilesPerMessage?: number
   /** Maximum context entries in one run. */
   maxContexts?: number
   /** Maximum combined context JSON bytes. */
@@ -75,6 +86,10 @@ export interface Config {
   threadIdleMs?: number
   /** Frontend Tool result timeout in milliseconds. */
   frontendToolTimeoutMs?: number
+  /** Human answer timeout in milliseconds. */
+  humanInteractionTimeoutMs?: number
+  /** Maximum pending human requests per thread. */
+  maxPendingInterrupts?: number
   /** Maximum retained events in one run ledger entry. */
   maxRunEvents?: number
   /** Maximum retained event bytes in one run ledger entry. */
@@ -88,16 +103,20 @@ export const Config: z<Config> = z.object({
   path: z.string().default('/ag-ui'),
   provider: z.string().required(),
   model: z.string().required(),
+  workspaceRoot: z.string().default(dshHomePath('workspaces')),
   agentPreset: z.string(),
   tenantPresets: z.dict(z.string()),
+  selectableAgentPresets: z.dict(z.array(z.string())),
   sharedSecret: z.string().required(),
   tenantHeader: z.string().default('x-dsh-tenant-id'),
   userHeader: z.string().default('x-dsh-user-id'),
   allowNonLoopback: z.boolean().default(false),
   maxRequestBytes: z.natural().default(256 * 1024),
+  maxFileBytes: z.natural().default(100 * 1024 * 1024),
   maxIdentityBytes: z.natural().default(256),
   maxMessages: z.natural().default(256),
   maxMessageBytes: z.natural().default(512 * 1024),
+  maxFilesPerMessage: z.natural().default(8),
   maxContexts: z.natural().default(32),
   maxContextBytes: z.natural().default(128 * 1024),
   maxTools: z.natural().default(32),
@@ -108,6 +127,8 @@ export const Config: z<Config> = z.object({
   maxThreads: z.natural().default(100),
   threadIdleMs: z.natural().default(30 * 60 * 1000),
   frontendToolTimeoutMs: z.natural().default(5 * 60 * 1000),
+  humanInteractionTimeoutMs: z.natural().default(5 * 60 * 1000),
+  maxPendingInterrupts: z.natural().default(16),
   maxRunEvents: z.natural().default(4096),
   maxRunEventBytes: z.natural().default(2 * 1024 * 1024),
   maxRunsPerThread: z.natural().default(32),
@@ -132,6 +153,7 @@ export class AgUiGateway extends Service implements AgUiAgentLookup {
   private defaultPresetId: string | undefined
   /** Canonical preset ids per configured tenant, resolved when activation validated them. */
   private readonly tenantPresetIds = new Map<string, string>()
+  private readonly selectablePresetIds = new Map<string, ReadonlySet<string>>()
 
   /**
    * Register the route and own every Agent created through it.
@@ -140,16 +162,36 @@ export class AgUiGateway extends Service implements AgUiAgentLookup {
    */
   constructor(ctx: Context, config: Config) {
     super(ctx, 'agUi')
-    this.resolved = config as Required<Config>
+    this.resolved = {
+      ...config,
+      workspaceRoot: resolveWorkspaceRoot(config.workspaceRoot as string),
+    } as Required<Config>
     assertConfig(ctx, this.resolved)
+    const fileRoute = createFileRoute({
+      path: this.resolved.path,
+      maxFileBytes: this.resolved.maxFileBytes,
+      authenticate: request => this.authenticate(request),
+      validateThreadId: threadId => validateIdentity(threadId, 'thread', this.resolved.maxIdentityBytes),
+      verifyFileUrl: (principal, threadId, value) => verifiedFileUrl(
+        value, threadId, String(durableSessionId(principal, threadId, this.resolved.sharedSecret)), this.resolved.sharedSecret,
+      ),
+      bindingFor: (principal, threadId) => this.bindingFor(principal, threadId),
+      respondError: (response, error) => this.respondError(response, error),
+    })
     ctx.effect(() => {
-      const unregister = ctx.webServer.register({
+      const unregisterRun = ctx.webServer.register({
         kind: 'exact',
         path: this.resolved.path,
         handler: (request, response) => this.handle(request, response),
       })
+      const unregisterFiles = ctx.webServer.register({
+        kind: 'prefix',
+        path: `${this.resolved.path}/threads`,
+        handler: fileRoute,
+      })
       return async () => {
-        unregister()
+        unregisterFiles()
+        unregisterRun()
         await this.disposeAll()
       }
     }, 'ag-ui.routeAndThreads')
@@ -162,8 +204,9 @@ export class AgUiGateway extends Service implements AgUiAgentLookup {
   async [Service.init](): Promise<void> {
     const presets = agentPresetsOf(this.ctx)
     const overrides = Object.entries(this.resolved.tenantPresets)
+    const selectable = Object.entries(this.resolved.selectableAgentPresets)
     if (presets === undefined) {
-      if (this.resolved.agentPreset === undefined && overrides.length === 0) return
+      if (this.resolved.agentPreset === undefined && overrides.length === 0 && selectable.length === 0) return
       throw new Error('ag-ui: agentPreset is configured but no agent-presets roster is mounted; mount the roster before this Gateway')
     }
     if (this.resolved.agentPreset !== undefined) {
@@ -171,6 +214,9 @@ export class AgUiGateway extends Service implements AgUiAgentLookup {
     }
     for (const [tenantId, presetId] of overrides) {
       this.tenantPresetIds.set(tenantId, (await presets.resolve(presetId)).id)
+    }
+    for (const [tenantId, ids] of selectable) {
+      this.selectablePresetIds.set(tenantId, new Set(await Promise.all(ids.map(async id => (await presets.resolve(id)).id))))
     }
   }
 
@@ -196,15 +242,20 @@ export class AgUiGateway extends Service implements AgUiAgentLookup {
       const input = parseInput(body)
       validateLimits(input, this.resolved)
       const binding = await this.bindingFor(principal, input.threadId)
-      const prior = binding.getRun(input.runId)
+      const prior = binding.getRun(input.runId, digest)
       if (prior !== undefined) {
-        if (prior.digest !== digest) {
-          throw new AgUiGatewayError('RUN_ID_CONFLICT', 'The runId was reused with different input.', 409)
-        }
         await replayRun(response, prior)
         return
       }
-      const controller = binding.reserveRun(input, digest)
+      const controller = await this.admitRun(binding, input, digest, response)
+      if ('replay' in controller) {
+        await replayRun(response, controller.replay)
+        return
+      }
+      if (response.destroyed) {
+        binding.disconnect(controller)
+        return
+      }
       /* v8 ignore next -- normal response close is covered; abnormal ownership is tested through Binding.disconnect. */
       const onClose = (): void => {
         /* v8 ignore next -- abnormal close is covered at the Binding boundary; normal end is already writableEnded. */
@@ -221,6 +272,24 @@ export class AgUiGateway extends Service implements AgUiAgentLookup {
       response.off('close', onClose)
     } catch (error) {
       this.respondError(response, publicError(error))
+    }
+  }
+
+  /** Queue behind the thread's active run, then reserve; a client that leaves the queue is not admitted. */
+  private async admitRun(
+    binding: ThreadBinding,
+    input: RunAgentInput,
+    digest: string,
+    response: ServerResponse,
+  ): Promise<RunAdmission> {
+    const gone = new AbortController()
+    const onClose = (): void => { gone.abort() }
+    response.once('close', onClose)
+    if (response.destroyed) gone.abort()
+    try {
+      return await binding.admit(input, digest, gone.signal)
+    } finally {
+      response.off('close', onClose)
     }
   }
 
@@ -260,13 +329,20 @@ export class AgUiGateway extends Service implements AgUiAgentLookup {
     const options: ThreadOptions = {
       provider: this.resolved.provider,
       model: this.resolved.model,
+      workspaceRoot: this.resolved.workspaceRoot,
       ...(presetId === undefined ? {} : { presetId }),
+      selectablePresetIds: this.selectablePresetIds.get(principal.tenantId) ?? new Set(),
       frontendToolTimeoutMs: this.resolved.frontendToolTimeoutMs,
+      humanInteractionTimeoutMs: this.resolved.humanInteractionTimeoutMs,
+      maxPendingInterrupts: this.resolved.maxPendingInterrupts,
       threadIdleMs: this.resolved.threadIdleMs,
       maxRunEvents: this.resolved.maxRunEvents,
       maxRunEventBytes: this.resolved.maxRunEventBytes,
       maxRunsPerThread: this.resolved.maxRunsPerThread,
       maxStateBytes: this.resolved.maxStateBytes,
+      maxFilesPerMessage: this.resolved.maxFilesPerMessage,
+      fileSecret: this.resolved.sharedSecret,
+      path: this.resolved.path,
     }
     const binding = new ThreadBinding(this.ctx, principal, threadId, durableSessionId(principal, threadId, this.resolved.sharedSecret), options, (expired) => {
       /* v8 ignore next -- one binding instance owns its idle timer; stale callbacks are contained defensively. */
@@ -316,6 +392,12 @@ export class AgUiGateway extends Service implements AgUiAgentLookup {
   }
 }
 
+/** Expand and absolutize the configured workspace root. */
+function resolveWorkspaceRoot(value: string): string {
+  if (value.trim() === '') throw new Error('ag-ui: workspaceRoot must not be empty')
+  return resolve(expandHomePath(value))
+}
+
 /** Reject invalid configuration before registering the HTTP route. */
 function assertConfig(ctx: Context, config: Required<Config>): void {
   if (!config.path.startsWith('/') || config.path === '/' || config.path.endsWith('/')) {
@@ -332,6 +414,12 @@ function assertConfig(ctx: Context, config: Required<Config>): void {
     if ((name.startsWith('max') || name.endsWith('Ms')) && typeof value === 'number' && value <= 0) {
       throw new Error(`ag-ui: ${name} must be positive`)
     }
+  }
+  for (const name of ['humanInteractionTimeoutMs', 'maxPendingInterrupts'] as const) {
+    if (!Number.isSafeInteger(config[name])) throw new Error(`ag-ui: ${name} must be a finite positive integer`)
+  }
+  if (config.humanInteractionTimeoutMs > 2_147_483_647) {
+    throw new Error('ag-ui: humanInteractionTimeoutMs must not exceed 2147483647 (the Node.js timer limit)')
   }
   if (config.maxRunEvents < 2) throw new Error('ag-ui: maxRunEvents must retain opening and terminal events')
   const longestId = 'x'.repeat(config.maxIdentityBytes)

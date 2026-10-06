@@ -3,6 +3,18 @@ import { defineConfig } from 'tsdown'
 /** Bundle each public Host entry from the TypeScript compiler output. */
 export default defineConfig([
   {
+    entry: ['lib/types/client.js'],
+    outDir: 'lib',
+    format: ['esm'],
+    platform: 'node',
+    target: 'es2024',
+    fixedExtension: false,
+    outputOptions: { codeSplitting: false },
+    dts: false,
+    clean: false,
+    sourcemap: true,
+  },
+  {
     entry: ['lib/types/browser-tools.js'],
     outDir: 'lib',
     format: ['esm'],

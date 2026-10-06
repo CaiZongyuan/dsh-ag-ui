@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { HttpAgent } from '@ag-ui/client'
 import { EventType, type BaseEvent, type RunAgentInput, type Tool } from '@ag-ui/core'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
+import { DshHttpAgent } from '../src/client.ts'
 import { disposeMountedContexts, mountGateway, runAgentEvents } from './harness.ts'
 import { textResponse, toolCallsResponse, toolResponse } from './scripted-adapter.ts'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
@@ -80,6 +81,7 @@ describe('AG-UI Gateway', () => {
       EventType.TEXT_MESSAGE_START,
       EventType.TEXT_MESSAGE_CONTENT,
       EventType.TEXT_MESSAGE_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     expect(agent.state).toEqual({
@@ -131,7 +133,7 @@ describe('AG-UI Gateway', () => {
       }),
       textResponse('Draft updated. Please review it before submitting.'),
     ])
-    const agent = new HttpAgent({ url: harness.url, headers: HEADERS, threadId: 'encounter-e001' })
+    const agent = new DshHttpAgent({ url: harness.url, headers: HEADERS, threadId: 'encounter-e001' })
     agent.addMessage({ id: 'user-1', role: 'user', content: 'Write the assessment here.' })
 
     const firstEvents: BaseEvent[] = []
@@ -151,6 +153,7 @@ describe('AG-UI Gateway', () => {
       EventType.TOOL_CALL_START,
       EventType.TOOL_CALL_ARGS,
       EventType.TOOL_CALL_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     const dshAgent = harness.ctx.agents.list()[0]
@@ -182,6 +185,7 @@ describe('AG-UI Gateway', () => {
       EventType.TEXT_MESSAGE_START,
       EventType.TEXT_MESSAGE_CONTENT,
       EventType.TEXT_MESSAGE_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     expect(dshAgent?.status).toBe('idle')
@@ -218,6 +222,7 @@ describe('AG-UI Gateway', () => {
       EventType.TOOL_CALL_START,
       EventType.TOOL_CALL_ARGS,
       EventType.TOOL_CALL_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     const dshAgent = harness.ctx.agents.list()[0]
@@ -253,6 +258,7 @@ describe('AG-UI Gateway', () => {
       EventType.TEXT_MESSAGE_START,
       EventType.TEXT_MESSAGE_CONTENT,
       EventType.TEXT_MESSAGE_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     expect(dshAgent?.status).toBe('idle')
@@ -281,6 +287,7 @@ describe('AG-UI Gateway', () => {
       EventType.TOOL_CALL_START,
       EventType.TOOL_CALL_ARGS,
       EventType.TOOL_CALL_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
 
@@ -303,6 +310,7 @@ describe('AG-UI Gateway', () => {
       EventType.TEXT_MESSAGE_START,
       EventType.TEXT_MESSAGE_CONTENT,
       EventType.TEXT_MESSAGE_END,
+      EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
     const dshAgent = harness.ctx.agents.list()[0]

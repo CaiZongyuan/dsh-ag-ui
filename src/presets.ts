@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 
 /**
  * Optional host-side agent-preset roster, accessed structurally so a
@@ -12,6 +13,8 @@ interface AgentPresetsLike {
   resolve(id?: string): Promise<{ readonly id: string }>
   /** Compose one agent from a preset; call inside the agent factory's setup window. */
   mount(agentCtx: Context, id?: string): Promise<unknown>
+  /** Select and durably record a composition while the native session is still blank. */
+  select(agent: Agent, id: string): Promise<string>
 }
 
 /** Resolve the host's agent-preset roster without requiring one. */

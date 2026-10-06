@@ -123,13 +123,13 @@ The timeout variables must be positive integers in canonical form (`1500`, not `
 
 | Component | Supported version |
 | --- | --- |
-| AG-UI client | `>=0.0.58 <0.1.0` (`~0.0.58`; tested with `0.0.58`) |
+| AG-UI client | `>=0.0.59 <0.1.0` (`~0.0.59`; tested with `0.0.59`) |
 | Node.js | `^22.19.0 || >=24.0.0` |
-| DeepSeek Harness | `0.2.0-rc.2` (exact release-candidate peers) |
+| DeepSeek Harness | `0.2.0-rc.2` (exact developer-preview peers) |
 
 ## Development
 
-The package is part of the `dsh-ag-ui` pnpm workspace. `pnpm check` inside this directory runs lint, strict TypeScript, coverage-gated tests, the build, and publint; the end-to-end specs spawn a real micro-host with a keyless scripted model and assert the agentic-chat scenario, session memory across runs, successful/error/empty tool results and their cards, and the failure and shutdown paths. From the repository root, run `pnpm -r --include-workspace-root check` to verify every package.
+The package is part of the `dsh-ag-ui` pnpm workspace. `pnpm check` inside this directory runs lint, strict TypeScript, coverage-gated tests, the build, and publint; the end-to-end specs spawn a real micro-host with a keyless scripted model and assert the agentic-chat scenario, session memory across runs, and the failure and shutdown paths.
 
 ## License
 

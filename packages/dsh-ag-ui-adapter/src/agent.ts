@@ -10,6 +10,7 @@
 import { AbstractAgent, runHttpRequest, transformHttpEventStream } from '@ag-ui/client'
 import type { AgentConfig, AgentSubscriber, RunAgentParameters, RunAgentResult } from '@ag-ui/client'
 import type { BaseEvent, RunAgentInput } from '@ag-ui/core'
+import { prepareDshRunInput } from 'dsh-ag-ui/client'
 import { finalize } from 'rxjs'
 import type { Observable } from 'rxjs'
 import { resolveAdapterOptions } from './config.ts'
@@ -120,7 +121,7 @@ export class DshAgent extends AbstractAgent {
         Accept: 'text/event-stream',
         ...this.identityHeaders,
       },
-      body: JSON.stringify(input),
+      body: JSON.stringify(prepareDshRunInput(input)),
       signal: this.abortController.signal,
     }
   }
@@ -131,6 +132,8 @@ export class DshAgent extends AbstractAgent {
     const httpEvents = runHttpRequest(async () => {
       this.disarmIdleTimer()
       await this.ensureStarted()
+      // Lazy startup arms the pre-warm timer; this subscription now owns an active run.
+      this.disarmIdleTimer()
       return await fetch(this.url, this.requestInit(input))
     })
     return transformHttpEventStream(httpEvents).pipe(finalize(() => this.armIdleTimer()))

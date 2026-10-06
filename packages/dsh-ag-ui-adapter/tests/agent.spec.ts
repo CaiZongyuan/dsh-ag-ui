@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { randomUUID } from '@ag-ui/client'
+import { randomUUID, RunAgentInputSchema, type RunAgentInput } from '@ag-ui/client'
 import { EventType, type BaseEvent } from '@ag-ui/core'
 import { DshAgent } from '../src/agent.ts'
 import { MODEL_ENV, PROVIDER_ENV } from '../src/config.ts'
@@ -36,6 +36,12 @@ function assistantText(agent: DshAgent): string | undefined {
   return agent.messages.findLast(message => message.role === 'assistant' && typeof message.content === 'string')?.content as string | undefined
 }
 
+class InspectableDshAgent extends DshAgent {
+  requestBody(input: RunAgentInput): RunAgentInput {
+    return RunAgentInputSchema.parse(JSON.parse(String(this.requestInit(input).body)))
+  }
+}
+
 describe('DshAgent', () => {
   it('preserves successful, failed, and empty tool results through the spawned micro-host', async () => {
     const agent = scriptedAgent()
@@ -70,6 +76,30 @@ describe('DshAgent', () => {
     ]))
     expect(assistantText(agent)).toBe('Tool probes completed.')
     await agent.stop()
+  })
+
+  it('omits presentation messages while retaining all user input', () => {
+    const agent = new InspectableDshAgent({
+      threadId: 'adapter-thread',
+      gateway: { provider: 'scripted', model: 'scripted' },
+    })
+    const nextUser = { id: 'next-user', role: 'user' as const, content: 'next' }
+    const input: RunAgentInput = {
+      threadId: 'adapter-thread',
+      runId: 'adapter-run',
+      messages: [
+        { id: 'old-user', role: 'user', content: 'x'.repeat(300_000) },
+        { id: 'settled-assistant', role: 'assistant', content: 'settled' },
+        nextUser,
+      ],
+      tools: [],
+      context: [],
+      state: {},
+      forwardedProps: {},
+    }
+
+    expect(agent.requestBody(input).messages).toEqual([input.messages[0], nextUser])
+    expect(input.messages).toHaveLength(3)
   })
 
   it('streams a keyless scripted agentic chat with session memory through the spawned micro-host', async () => {
@@ -149,7 +179,7 @@ describe('DshAgent', () => {
     }
   })
 
-  it('shuts the host down after an idle window and spawns a fresh one on the next run', async () => {
+  it('keeps a slow first run alive, then shuts down when idle and spawns a fresh host', async () => {
     const agent = new DshAgent({
       threadId: 'adapter-thread',
       gateway: { provider: 'scripted', model: 'scripted' },
@@ -157,14 +187,14 @@ describe('DshAgent', () => {
       idleShutdownMs: 150,
     })
     agents.push(agent)
-    await ask(agent, 'My name is Ada.')
+    await ask(agent, 'Reply slowly. My name is Ada.')
     expect(assistantText(agent)).toBe('Hello Ada.')
     await vi.waitFor(() => {
       expect(() => agent.url).toThrow('has not started')
     })
-    // the replacement child starts empty: process-local session memory is gone
+    // The replacement child is empty, but the client resends its complete transcript.
     await ask(agent, 'What is my name?')
-    expect(assistantText(agent)).toBe('You have not told me your name.')
+    expect(assistantText(agent)).toBe('Your name is Ada.')
     await agent.stop()
   })
 

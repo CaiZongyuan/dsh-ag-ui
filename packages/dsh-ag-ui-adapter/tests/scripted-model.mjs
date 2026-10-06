@@ -1,4 +1,5 @@
 import { LlmAdapter, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { setTimeout as delay } from 'node:timers/promises'
 
 /**
  * Keyless deterministic model for the adapter's end-to-end specs: a scripted
@@ -28,6 +29,7 @@ class AdapterScriptedModel extends LlmAdapter {
       return
     }
     const latestUser = readLatestUserText(request.messages)
+    if (latestUser.startsWith('Reply slowly.')) await delay(300)
     if (/what is my name/i.test(latestUser)) {
       const named = JSON.stringify(request.messages).match(/my name is ([A-Za-z]+)/i)
       yield * text(named ? `Your name is ${named[1]}.` : 'You have not told me your name.')

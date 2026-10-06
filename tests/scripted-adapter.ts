@@ -1,7 +1,7 @@
 import { ToolCallId, LlmAdapter, type GenerateOptions, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
 
 /** One deterministic model outcome used by Gateway and Thread tests. */
-export type ScriptedResponse = StreamChunk[] | Error
+export type ScriptedResponse = StreamChunk[] | Error | Promise<StreamChunk[]>
 
 /** Model adapter that records requests and consumes deterministic outcomes in order. */
 export class ScriptedAdapter extends LlmAdapter {
@@ -17,7 +17,7 @@ export class ScriptedAdapter extends LlmAdapter {
 
   async *stream(request: GenerateOptions): AsyncIterable<StreamChunk> {
     this.requests.push(request)
-    const response = this.script.shift()
+    const response = await this.script.shift()
     if (response instanceof Error) throw response
     if (response === undefined) throw new Error('scripted model adapter exhausted')
     for (const chunk of response) yield chunk
