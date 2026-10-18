@@ -1,7 +1,7 @@
 - id: webserver
   name: '@deepseek-ai/dsh-host-webserver'
   config:
-    host: !!js process.env.HOST || '0.0.0.0'
+    host: !!js process.env.HOST || '127.0.0.1'
     port: !!js Number(process.env.PORT || 8020)
 
 - id: llm

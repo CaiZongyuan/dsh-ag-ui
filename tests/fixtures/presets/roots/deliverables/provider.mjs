@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
+import WorkingDirectory from '@deepseek-ai/dsh-working-directory'
 import * as Present from '@deepseek-ai/dsh-tool-present'
 
 const cwd = fileURLToPath(new URL('./files/', import.meta.url))
@@ -19,5 +20,6 @@ export const name = 'isolated-deliverables'
 
 export async function apply(ctx) {
   await ctx.plugin(PresetFileSystem, { cwd })
+  await ctx.plugin(WorkingDirectory, { defaultDirectory: cwd })
   await ctx.plugin(Present, { maxFiles: 8 })
 }

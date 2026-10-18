@@ -9,9 +9,10 @@ import { HttpAgent } from '@ag-ui/client'
 import { ActivityMessageSchema, EventType, type ActivityMessage } from '@ag-ui/core'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
+import WorkingDirectory from '@deepseek-ai/dsh-working-directory'
 import { FsError } from '@deepseek-ai/dsh-fs'
 import * as Present from '@deepseek-ai/dsh-tool-present'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import AgUiGateway from 'dsh-ag-ui'
@@ -40,13 +41,14 @@ async function mount(root?: string, maxFileBytes = 1024, filePath = 'report.txt'
   await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
   await mountTestAgentCore(ctx)
   await ctx.plugin(LocalFileSystem, { cwd: root })
+  await ctx.plugin(WorkingDirectory, {})
   if (isolatedPreset) {
     ctx.baseUrl = new URL('./fixtures/presets/roots/', import.meta.url).href
     await ctx.plugin(Loader)
     await ctx.plugin(AgentPresets, { default: 'deliverables' })
     const dispose = await ctx.agentPresets.register({
       id: 'deliverables',
-      plugins: [{ id: 'isolated-deliverables', name: new URL('./deliverables/provider.mjs', ctx.baseUrl).href, isolate: { fs: true } }],
+      plugins: [{ id: 'isolated-deliverables', name: new URL('./deliverables/provider.mjs', ctx.baseUrl).href, isolate: { fs: true, workingDirectory: true } }],
     })
     ctx.effect(() => dispose)
   } else {

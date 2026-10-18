@@ -28,6 +28,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Updated the exact DeepSeek Harness target to `0.2.1-rc.2`, Cordis `4.0.5`, and Schemastery `3.18.5`; removed the optional invariant companion because DSH no longer publishes that service.
+
 - Updated the Gateway and embedding adapter's exact DeepSeek Harness target to `0.2.0-rc.2`, with first-class tool-result messages, producer-specific context sources, declarative preset registration, and v4 session persistence.
 - A run admits every new user message it carries into one DSH turn, in arrival order, and a run without new messages only synchronizes history; `INVALID_MESSAGE_BATCH` remains for batches mixing user messages with frontend Tool results.
 - Runs of one thread now queue in arrival order behind the active run instead of failing with `RUN_IN_PROGRESS`; a waiting client that disconnects is never admitted.
