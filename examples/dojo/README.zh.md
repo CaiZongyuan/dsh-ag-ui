@@ -19,12 +19,12 @@ pnpm build
 node examples/dojo/start.mjs
 ```
 
-本机默认访问地址是 `http://127.0.0.1:8020`。为兼容 Dojo，server 默认绑定 `0.0.0.0`。
+本机默认访问地址是 `http://127.0.0.1:8020`。server 默认绑定 loopback；远程 Dojo 访问时将 `HOST` 设置为一个具体的本机网卡 IP，DSH 不接受通配地址。
 
 需要时可以覆盖精确 host 和 port：
 
 ```bash
-HOST=0.0.0.0 PORT=8889 node examples/dojo/start.mjs
+HOST=127.0.0.1 PORT=8889 node examples/dojo/start.mjs
 ```
 
 检查 readiness：
@@ -89,7 +89,7 @@ dsh plugin --profile web add .
 export DSH_AG_UI_PROVIDER='openai'
 export DSH_AG_UI_MODEL='gpt-5.6-sol'
 export DSH_AG_UI_SHARED_SECRET="$(openssl rand -hex 32)"
-HOST=0.0.0.0 PORT=8020 \
+HOST=127.0.0.1 PORT=8020 \
   dsh --profile web --patch ./examples/dojo/cordis.real.patch.yml
 ```
 

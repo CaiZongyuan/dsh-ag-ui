@@ -19,12 +19,12 @@ pnpm build
 node examples/dojo/start.mjs
 ```
 
-The default address is `http://127.0.0.1:8020` when accessed locally. The server binds to `0.0.0.0` by default for Dojo compatibility.
+The default address is `http://127.0.0.1:8020` when accessed locally. The server binds to loopback by default. For remote Dojo access, set `HOST` to one concrete local interface IP; DSH rejects wildcard addresses.
 
 Override the exact host and port when needed:
 
 ```bash
-HOST=0.0.0.0 PORT=8889 node examples/dojo/start.mjs
+HOST=127.0.0.1 PORT=8889 node examples/dojo/start.mjs
 ```
 
 Check readiness:
@@ -89,7 +89,7 @@ dsh plugin --profile web add .
 export DSH_AG_UI_PROVIDER='openai'
 export DSH_AG_UI_MODEL='gpt-5.6-sol'
 export DSH_AG_UI_SHARED_SECRET="$(openssl rand -hex 32)"
-HOST=0.0.0.0 PORT=8020 \
+HOST=127.0.0.1 PORT=8020 \
   dsh --profile web --patch ./examples/dojo/cordis.real.patch.yml
 ```
 

@@ -3,7 +3,7 @@
 # and Host services while adding the Dojo BFF routes from this checkout.
 - id: webserver
   config:
-    host: !!js process.env.HOST || '0.0.0.0'
+    host: !!js process.env.HOST || '127.0.0.1'
     port: !!js Number(process.env.PORT || 8020)
 
 - id: ag-ui

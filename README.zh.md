@@ -63,7 +63,7 @@ export DSH_AG_UI_PATH='/ag-ui' # 可选
 dsh --profile web
 ```
 
-Bundle 插入一个始终启用的 `browser-tools` row 和一个按条件启用的 Host-plane `ag-ui` row。前者从不创建 Agent：调用方负责选择已有 Agent 并提供浏览器传输。Package 仍导出 `dsh-ag-ui/invariant`；提供 process-global `invariants` service 的 composition 可以显式加载该可选 companion。默认 web Profile 不提供该 service，因此 installable bundle 不会自动挂载 companion。
+Bundle 插入一个始终启用的 `browser-tools` row 和一个按条件启用的 Host-plane `ag-ui` row。前者从不创建 Agent：调用方负责选择已有 Agent 并提供浏览器传输。
 
 ## Browser Tool broker
 
@@ -445,9 +445,9 @@ Backend Tool result 会发出 `TOOL_CALL_RESULT`。Frontend Tool result 不在 A
 | AG-UI core/client/encoder | `>=0.0.59 <0.1.0`（`~0.0.59`；已用 `0.0.59` 验证） |
 | `dsh-ag-ui/client` companion | `@ag-ui/client ~0.0.59` |
 | Node.js | `^22.19.0` 或 `>=24.0.0` |
-| DeepSeek Harness | `0.2.0-rc.2`（精确的 developer-preview peers） |
+| DeepSeek Harness | `0.2.1-rc.2`（精确的 developer-preview peers） |
 
-DSH `0.2.0-rc.2` 使用 v4 会话日志。实时文本通过 `agent/assistant-stream` 接收，已结算历史通过 `snapshotEvents()` 读取。配置 JSONL 持久化插件后，DSH 在恢复时迁移旧日志（已用 `0.1.1-rc.2` 录制验证）。图片和文件 Tool 结果分别投影为 `[image result]` 和 `[file result]` 占位符，不传输附件字节。
+DSH `0.2.1-rc.2` 使用 v4 会话日志。实时文本通过 `agent/assistant-stream` 接收，已结算历史通过 `snapshotEvents()` 读取。配置 JSONL 持久化插件后，DSH 在恢复时迁移旧日志（已用 `0.1.1-rc.2` 录制验证）。图片和文件 Tool 结果分别投影为 `[image result]` 和 `[file result]` 占位符，不传输附件字节。
 
 DSH 仍处于 developer preview，可能引入 breaking changes。在这些 API 稳定前，本 package 使用精确 DSH peer versions。
 

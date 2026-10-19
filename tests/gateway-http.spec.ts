@@ -1,6 +1,6 @@
 import { request as httpRequest, type Server } from 'node:http'
 import { mkdtemp, realpath, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { networkInterfaces, tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { RunFinishedEventSchema, type RunAgentInput, type Tool } from '@ag-ui/core'
@@ -40,7 +40,7 @@ afterEach(async () => {
 async function mount(
   overrides: Partial<Config> = {},
   script: ScriptedResponse[] = [textResponse('ok')],
-  host: '127.0.0.1' | '0.0.0.0' = '127.0.0.1',
+  host: string = '127.0.0.1',
   workspaceRegistry?: { create(path: string, title?: string): Promise<unknown> },
 ) {
   const ctx = new Context()
@@ -172,9 +172,11 @@ describe('AG-UI configuration', () => {
   })
 
   it('requires explicit permission for a non-loopback bind', async () => {
-    await expect(mount({}, [textResponse('unused')], '0.0.0.0')).rejects.toThrow('non-loopback WebServer bind')
-    const allowed = await mount({ allowNonLoopback: true }, [textResponse('ok')], '0.0.0.0')
-    expect(allowed.ctx.webServer.host).toBe('0.0.0.0')
+    const host = Object.values(networkInterfaces()).flat().find(address => address?.family === 'IPv4' && !address.internal)?.address
+    expect(host).toBeDefined()
+    await expect(mount({}, [textResponse('unused')], host)).rejects.toThrow('non-loopback WebServer bind')
+    const allowed = await mount({ allowNonLoopback: true }, [textResponse('ok')], host)
+    expect(allowed.ctx.webServer.host).toBe(host)
   })
 
   it('defaults workspaceRoot under DSH home and expands relative and home paths', async () => {
@@ -345,6 +347,7 @@ describe('AG-UI gateway lifecycle', () => {
     const first = postStreaming(url, input())
     await first.started
     const second = post(url, secondRun())
+    await vi.waitFor(() => { expect(debug).toHaveBeenCalledWith(expect.stringContaining('run-2 waits for the active run')) })
     const third = post(url, input({ runId: 'run-3', messages: [{ id: 'message-3', role: 'user', content: 'third' }] }))
     await vi.waitFor(() => {
       expect(debug).toHaveBeenCalledWith(expect.stringContaining('run-2 waits for the active run'))

@@ -71,7 +71,7 @@ describe('Dojo-compatible feature suite', () => {
     const child = spawn(process.execPath, [exampleStart], {
       env: {
         ...process.env,
-        HOST: '0.0.0.0',
+        HOST: '127.0.0.1',
         PORT: String(port),
         DSH_AG_UI_DOJO_DEBUG: '1',
       },

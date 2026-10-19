@@ -15,7 +15,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
-      exclude: ['src/types.ts', 'src/invariant.ts'],
+      exclude: ['src/types.ts'],
       reporter: ['text', 'lcov'],
       thresholds: {
         perFile: true,
