@@ -22,11 +22,10 @@ No child process exists until the first run needs one: `run()` starts the micro-
 
 ```bash
 pnpm add dsh-ag-ui-adapter @ag-ui/client dsh-ag-ui \
-  @deepseek-ai/cordis@4.0.4 \
+  @deepseek-ai/cordis@4.0.5 \
   @deepseek-ai/dsh-host-webserver@0.2.1-rc.2 \
   @deepseek-ai/dsh-agent@0.2.1-rc.2 \
   @deepseek-ai/dsh-agent-loop@0.2.1-rc.2 \
-  @deepseek-ai/dsh-invariants@0.2.1-rc.2 \
   @deepseek-ai/dsh-llm@0.2.1-rc.2 \
   @deepseek-ai/dsh-session@0.2.1-rc.2 \
   @deepseek-ai/dsh-session-persistence@0.2.1-rc.2 \
