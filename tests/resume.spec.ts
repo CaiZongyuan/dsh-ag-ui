@@ -202,6 +202,8 @@ describe('ThreadBinding durable resume', () => {
     await copyFile(RC2_FIXTURE, join(sessionDir, 'session.jsonl'))
 
     const mounted = await mountDurable([textResponse('History kept the codeword pine-cone-7.')], root)
+    // Resume keeps the model route in the historical request header.
+    mounted.ctx.llm.registerAdapter(['fixture-scripted'], mounted.adapter)
     const resumed = bindingFor(mounted.ctx, mounted.root, RC2_SESSION)
     const warn = vi.spyOn(mounted.ctx.logger, 'warn')
     await resumed.initialize()
@@ -219,6 +221,7 @@ describe('ThreadBinding durable resume', () => {
     await continuation.done
 
     expect(eventsOf(continuation).at(-1)).toMatchObject({ type: EventType.RUN_FINISHED })
+    expect(mounted.adapter.requests[0]).toMatchObject({ provider: 'fixture-scripted', model: 'fixture-scripted' })
     expect(JSON.stringify(mounted.adapter.requests[0]?.messages)).toContain('pine-cone-7')
   })
 

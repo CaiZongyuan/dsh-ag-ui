@@ -7,11 +7,12 @@
  */
 
 import { pathToFileURL } from 'node:url'
+import { isAbsolute } from 'node:path'
 
 /** Resolve one overlay row name to a `file:` URL the child can import. */
 export function resolveHostModule(specifier: string): string {
   if (specifier.startsWith('file://')) return specifier
-  if (specifier.startsWith('/')) return pathToFileURL(specifier).href
+  if (isAbsolute(specifier)) return pathToFileURL(specifier).href
   if (specifier.startsWith('.')) {
     throw new Error(
       `dsh-ag-ui-adapter cannot resolve the relative host module "${specifier}": `

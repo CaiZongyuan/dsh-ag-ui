@@ -23,11 +23,12 @@ import type {
 import { createUserMessage, errorChain, freezeMessage, MessageId, ToolCallId, type UserMessage, type ContextFormed } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
-import type {} from '@deepseek-ai/dsh-session-projection'
+import { ToolExecutionPipeline } from '@deepseek-ai/dsh-tools/pipeline'
 import {
   assertObjectJsonSchema,
   validateJsonSchemaValue,
   type ObjectJsonSchema,
+  type ResolvedToolSet,
   type ToolDefinition,
   type ToolRunContext,
 } from '@deepseek-ai/dsh-tools'
@@ -118,6 +119,7 @@ interface FrontendToolRegistration {
 
 interface PendingFrontendCall {
   readonly turn: number
+  readonly toolSet?: ResolvedToolSet
   resolve(value: FrontendToolResultValue): void
   reject(error: Error): void
 }
@@ -156,8 +158,14 @@ export class ThreadBinding {
     isFrontendTool: (name) => this.frontendTools.has(name),
   }
   /** Whether an announced Tool would still start while a parked call holds the pool. */
-  private readonly startsWhileParked = (name: string): boolean =>
-    this.ctx.tools.executionMode({ ...SCHEDULING_PROBE, name, agent: this.liveAgent }).kind === 'parallel'
+  private readonly startsWhileParked = (name: string): boolean => {
+    const toolSet = this.pendingCalls.values().next().value?.toolSet
+    return this.toolPipeline.executionMode({
+      ...SCHEDULING_PROBE, name, agent: this.liveAgent,
+      ...(toolSet === undefined ? {} : { toolSet }),
+    }).kind === 'parallel'
+  }
+  private readonly toolPipeline: ToolExecutionPipeline
 
   private handle: AgentHandle | undefined
   private agent: Agent | undefined
@@ -189,6 +197,7 @@ export class ThreadBinding {
     private readonly options: ThreadOptions,
     private readonly onExpired: (binding: ThreadBinding) => void,
   ) {
+    this.toolPipeline = new ToolExecutionPipeline(ctx)
     this.identity = { principal, threadId }
     this.sessionId = sessionId
     this.projection = new SessionProjection(sessionId, this.presenter, (seq, index) =>
@@ -440,8 +449,8 @@ export class ThreadBinding {
       throw new AgUiGatewayError('PRESET_NOT_ALLOWED', 'This tenant may not select the requested agent preset.', 403)
     }
     // Read the native boundary so history can report a mismatch without calling select.
-    const boundary = this.ctx.get('sessionProjections')?.stateOf(this.liveAgent.session, 'turnBoundary')
-    if (boundary !== undefined && (boundary.openTurnStartSeq !== null || boundary.lastTurn > 0)) {
+    const boundary = this.ctx.agents.turnBoundaryOf(this.liveAgent.session)
+    if (boundary.openTurnStartSeq !== null || boundary.lastTurn > 0) {
       throw new AgUiGatewayError('PRESET_LOCKED', 'The thread has started; choose a new thread to use another agent preset.', 409)
     }
     if (readOnly || this.classifyMessages(input).kind === 'sync') return
@@ -1263,6 +1272,7 @@ export class ThreadBinding {
     }
     const pending: PendingFrontendCall = {
       turn: lifecycle.turn,
+      ...(exec.toolSet === undefined ? {} : { toolSet: exec.toolSet }),
       resolve: (value) => { settle(() => { deferred.resolve(value) }) },
       reject: (error) => { settle(() => { deferred.reject(error) }) },
     }

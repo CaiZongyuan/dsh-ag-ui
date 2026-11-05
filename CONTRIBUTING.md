@@ -4,7 +4,7 @@ Thank you for contributing to `dsh-ag-ui`.
 
 ## Development requirements
 
-- Node.js `^22.19.0` or `>=24.0.0`
+- Node.js `>=24.9.0`
 - Corepack with the pnpm version declared in `package.json`
 - English commit messages, source comments, JSDoc, diagnostics, and test descriptions
 - English README changes accompanied by the equivalent `README.zh.md` update

@@ -90,7 +90,7 @@ describe('native file receipt admission', () => {
     ])
     expect(failed.record.events.at(-1)).toMatchObject({ code: 'FILE_NOT_FOUND' })
     expect(users(binding)).toHaveLength(0)
-    expect(ctx.fileUploads.resolve(binding.liveAgent, receipt.receiptId)).toEqual(receipt.file)
+    expect(ctx.fileUploads.resolve(binding.liveAgent, receipt.receiptId)).toEqual({ type: 'file', attachment: receipt.file })
     expect((await drive(binding, 'retry', [{ type: 'document', source }])).record.events.at(-1)?.type).toBe(EventType.RUN_FINISHED)
   })
 
@@ -100,7 +100,7 @@ describe('native file receipt admission', () => {
     vi.spyOn(binding.liveAgent, 'followup').mockImplementationOnce(() => { throw new Error('queue rejected') })
     expect((await drive(binding, 'rejected', [{ type: 'document', source }])).record.events.at(-1)?.type).toBe(EventType.RUN_ERROR)
     ctx.fileUploads.retirePrompt(binding.liveAgent, durableUserId('message-rejected'))
-    expect(ctx.fileUploads.resolve(binding.liveAgent, receipt.receiptId)).toEqual(receipt.file)
+    expect(ctx.fileUploads.resolve(binding.liveAgent, receipt.receiptId)).toEqual({ type: 'file', attachment: receipt.file })
     expect((await drive(binding, 'retry', [{ type: 'document', source }])).record.events.at(-1)?.type).toBe(EventType.RUN_FINISHED)
   })
 
@@ -119,8 +119,8 @@ describe('native file receipt admission', () => {
     await failed.done
     expect(failed.record.events.at(-1)).toMatchObject({ code: 'AGENT_EXECUTION_ERROR' })
     expect(users(binding)).toHaveLength(0)
-    expect(ctx.fileUploads.resolve(binding.liveAgent, first.receipt.receiptId)).toEqual(first.receipt.file)
-    expect(ctx.fileUploads.resolve(binding.liveAgent, second.receipt.receiptId)).toEqual(second.receipt.file)
+    expect(ctx.fileUploads.resolve(binding.liveAgent, first.receipt.receiptId)).toEqual({ type: 'file', attachment: first.receipt.file })
+    expect(ctx.fileUploads.resolve(binding.liveAgent, second.receipt.receiptId)).toEqual({ type: 'file', attachment: second.receipt.file })
     // No user message claimed the canceled prefix, so native staged receipts can be bound again.
     const retry = binding.reserveRun({ ...request, runId: 'batch-retry' }, 'batch-retry')
     binding.drive(retry)
@@ -210,7 +210,7 @@ describe('native file receipt admission', () => {
     const run = await drive(binding, 'snapshot-overflow', [{ type: 'document', source }])
     expect(run.record.events.at(-1)).toMatchObject({ code: 'AG_UI_EVENT_BUFFER_OVERFLOW' })
     expect(users(binding)).toHaveLength(0)
-    expect(ctx.fileUploads.resolve(binding.liveAgent, receipt.receiptId)).toEqual(receipt.file)
+    expect(ctx.fileUploads.resolve(binding.liveAgent, receipt.receiptId)).toEqual({ type: 'file', attachment: receipt.file })
   })
 
   it.each([
@@ -245,7 +245,7 @@ describe('native file receipt admission', () => {
     expect(run.record.events.at(-1)).toMatchObject({ code })
     expect(run.record.events.some(event => event.type === EventType.MESSAGES_SNAPSHOT)).toBe(false)
     expect(users(binding)).toHaveLength(0)
-    expect(ctx.fileUploads.resolve(binding.liveAgent, receipt.receiptId)).toEqual(receipt.file)
+    expect(ctx.fileUploads.resolve(binding.liveAgent, receipt.receiptId)).toEqual({ type: 'file', attachment: receipt.file })
     unregister()
     const retry = binding.reserveRun({ ...request, runId: 'corrected' }, 'corrected')
     binding.drive(retry)
@@ -321,7 +321,7 @@ describe('native file receipt admission', () => {
       expect(expired).not.toHaveBeenCalled()
       release()
       const completed = await pending
-      expect(ctx.fileUploads.resolve(binding.liveAgent, completed.receiptId)).toEqual(completed.file)
+      expect(ctx.fileUploads.resolve(binding.liveAgent, completed.receiptId)).toEqual({ type: 'file', attachment: completed.file })
       await vi.advanceTimersByTimeAsync(999)
       expect(expired).not.toHaveBeenCalled()
       await vi.advanceTimersByTimeAsync(1)

@@ -5,6 +5,8 @@
 
 An [`@ag-ui/client`](https://www.npmjs.com/package/@ag-ui/client) `AbstractAgent` that embeds [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) in a Node.js application. Instead of deploying a Host and proxying through a BFF, `DshAgent` spawns a DSH micro-host as a child process and speaks AG-UI to it over a loopback HTTP connection.
 
+Requires Node.js `>=24.9.0`, Cordis `4.1.0`, and matching DSH `0.2.2-rc.1` packages. The minimal plugin composition includes the separate native Tool executor so model requests and Tool results use the same supported execution path.
+
 > This is a community project. It is not an official DeepSeek or AG-UI package.
 
 ## How it works
@@ -22,17 +24,18 @@ No child process exists until the first run needs one: `run()` starts the micro-
 
 ```bash
 pnpm add dsh-ag-ui-adapter @ag-ui/client dsh-ag-ui \
-  @deepseek-ai/cordis@4.0.5 \
-  @deepseek-ai/dsh-host-webserver@0.2.1-rc.2 \
-  @deepseek-ai/dsh-agent@0.2.1-rc.2 \
-  @deepseek-ai/dsh-agent-loop@0.2.1-rc.2 \
-  @deepseek-ai/dsh-llm@0.2.1-rc.2 \
-  @deepseek-ai/dsh-session@0.2.1-rc.2 \
-  @deepseek-ai/dsh-session-persistence@0.2.1-rc.2 \
-  @deepseek-ai/dsh-session-projection@0.2.1-rc.2 \
-  @deepseek-ai/dsh-system-prompt@0.2.1-rc.2 \
-  @deepseek-ai/dsh-tools@0.2.1-rc.2 \
-  @deepseek-ai/dsh-util-values@0.2.1-rc.2
+  @deepseek-ai/cordis@4.1.0 \
+  @deepseek-ai/dsh-host-webserver@0.2.2-rc.1 \
+  @deepseek-ai/dsh-agent@0.2.2-rc.1 \
+  @deepseek-ai/dsh-agent-loop@0.2.2-rc.1 \
+  @deepseek-ai/dsh-llm@0.2.2-rc.1 \
+  @deepseek-ai/dsh-session@0.2.2-rc.1 \
+  @deepseek-ai/dsh-session-persistence@0.2.2-rc.1 \
+  @deepseek-ai/dsh-session-projection@0.2.2-rc.1 \
+  @deepseek-ai/dsh-system-prompt@0.2.2-rc.1 \
+  @deepseek-ai/dsh-tools@0.2.2-rc.1 \
+  @deepseek-ai/dsh-tool-executor-native@0.2.2-rc.1 \
+  @deepseek-ai/dsh-util-values@0.2.2-rc.1
 ```
 
 ```ts
@@ -58,6 +61,7 @@ const agent = new DshAgent({
       config: { persona: 'You are a helpful assistant.' },
     },
     { id: 'tools', name: '@deepseek-ai/dsh-tools' },
+    { id: 'tool-executor-native', name: '@deepseek-ai/dsh-tool-executor-native' },
     { id: 'agent', name: '@deepseek-ai/dsh-agent' },
     { id: 'agent-loop', name: '@deepseek-ai/dsh-agent-loop', config: { agents: [] } },
 
@@ -123,8 +127,8 @@ The timeout variables must be positive integers in canonical form (`1500`, not `
 | Component | Supported version |
 | --- | --- |
 | AG-UI client | `>=0.0.59 <0.1.0` (`~0.0.59`; tested with `0.0.59`) |
-| Node.js | `^22.19.0 || >=24.0.0` |
-| DeepSeek Harness | `0.2.1-rc.2` (exact developer-preview peers) |
+| Node.js | `>=24.9.0` |
+| DeepSeek Harness | `0.2.2-rc.1` (exact developer-preview peers) |
 
 ## Development
 

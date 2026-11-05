@@ -16,6 +16,7 @@ export const AGENT_CORE_ROWS: readonly HostPluginRow[] = [
     },
   },
   { id: 'tools', name: '@deepseek-ai/dsh-tools' },
+  { id: 'tool-executor-native', name: '@deepseek-ai/dsh-tool-executor-native' },
   { id: 'agent', name: '@deepseek-ai/dsh-agent' },
   { id: 'agent-loop', name: '@deepseek-ai/dsh-agent-loop', config: { agents: [] } },
 ]

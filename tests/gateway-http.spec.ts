@@ -191,16 +191,17 @@ describe('AG-UI configuration', () => {
     expect(relativeMount.ctx.agents.list()[0]?.session.header.cwd)
       .toBe(await realpath(join(relativeRoot, workspaceName('thread-1'))))
 
-    const priorHome = process.env.HOME
-    process.env.HOME = root
+    const homeVariable = process.platform === 'win32' ? 'USERPROFILE' : 'HOME'
+    const priorHome = process.env[homeVariable]
+    process.env[homeVariable] = root
     try {
       const homeMount = await mount({ workspaceRoot: '~/home-path' })
       expect((await post(homeMount.url, input({ threadId: 'thread-home', runId: 'run-home' }))).status).toBe(200)
       expect(homeMount.ctx.agents.list()[0]?.session.header.cwd)
         .toBe(await realpath(join(root, 'home-path', workspaceName('thread-home'))))
     } finally {
-      if (priorHome === undefined) delete process.env.HOME
-      else process.env.HOME = priorHome
+      if (priorHome === undefined) delete process.env[homeVariable]
+      else process.env[homeVariable] = priorHome
     }
   })
 

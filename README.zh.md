@@ -33,7 +33,7 @@
 
 ## 运行要求
 
-- Node.js `^22.19.0` 或 `>=24.0.0`
+- Node.js `>=24.9.0`
 - 包含标准 Host services 的 DSH Profile
 - 已注册的 DSH model provider 与 model
 - 一个经过认证的 Backend-for-Frontend，确保浏览器无法获得 Gateway secret
@@ -444,10 +444,12 @@ Backend Tool result 会发出 `TOOL_CALL_RESULT`。Frontend Tool result 不在 A
 | --- | --- |
 | AG-UI core/client/encoder | `>=0.0.59 <0.1.0`（`~0.0.59`；已用 `0.0.59` 验证） |
 | `dsh-ag-ui/client` companion | `@ag-ui/client ~0.0.59` |
-| Node.js | `^22.19.0` 或 `>=24.0.0` |
-| DeepSeek Harness | `0.2.1-rc.2`（精确的 developer-preview peers） |
+| Node.js | `>=24.9.0` |
+| DeepSeek Harness | `0.2.2-rc.1`（精确的 developer-preview peers） |
 
-DSH `0.2.1-rc.2` 使用 v4 会话日志。实时文本通过 `agent/assistant-stream` 接收，已结算历史通过 `snapshotEvents()` 读取。配置 JSONL 持久化插件后，DSH 在恢复时迁移旧日志（已用 `0.1.1-rc.2` 录制验证）。图片和文件 Tool 结果分别投影为 `[image result]` 和 `[file result]` 占位符，不传输附件字节。
+Gateway 与嵌入适配器要求 Node.js `>=24.9.0`、Cordis `4.1.0` 和版本一致的 `0.2.2-rc.1` DSH 包。手工组合宿主时，除 `@deepseek-ai/dsh-tools` 外还须加载 `@deepseek-ai/dsh-tool-executor-native`；工具注册表不再自带默认执行器，官方原生组合包已提供该组件。Gateway 通过 Agent 注册器读取回合边界，前端工具挂起期间保留该步的工具准入集合，以判断后续并行调用能否启动。
+
+DSH `0.2.2-rc.1` 使用 v4 会话日志。实时文本通过 `agent/assistant-stream` 接收，已结算历史通过 `snapshotEvents()` 读取。配置 JSONL 持久化插件后，DSH 在恢复时迁移旧日志（已用 `0.1.1-rc.2` 录制验证）。图片和文件 Tool 结果分别投影为 `[image result]` 和 `[file result]` 占位符，不传输附件字节。
 
 DSH 仍处于 developer preview，可能引入 breaking changes。在这些 API 稳定前，本 package 使用精确 DSH peer versions。
 
