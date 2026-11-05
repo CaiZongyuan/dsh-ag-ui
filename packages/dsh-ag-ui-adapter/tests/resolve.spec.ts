@@ -7,7 +7,9 @@ describe('resolveHostModule', () => {
   })
 
   it('maps absolute paths to file URLs', () => {
-    expect(resolveHostModule('/opt/plugins/edge.mjs')).toBe('file:///opt/plugins/edge.mjs')
+    const path = process.platform === 'win32' ? 'C:\\opt\\plugins\\edge.mjs' : '/opt/plugins/edge.mjs'
+    const url = process.platform === 'win32' ? 'file:///C:/opt/plugins/edge.mjs' : 'file:///opt/plugins/edge.mjs'
+    expect(resolveHostModule(path)).toBe(url)
   })
 
   it('resolves bare specifiers through this package', () => {

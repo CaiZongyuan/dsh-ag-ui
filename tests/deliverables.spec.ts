@@ -15,6 +15,7 @@ import * as Present from '@deepseek-ai/dsh-tool-present'
 import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { ToolExecutionPipeline } from '@deepseek-ai/dsh-tools/pipeline'
 import AgUiGateway from 'dsh-ag-ui'
 import { durableSessionId } from '../src/session-id.ts'
 import { isPresentedEvent } from '../src/deliverables.ts'
@@ -58,13 +59,15 @@ async function mount(root?: string, maxFileBytes = 1024, filePath = 'report.txt'
   ctx.llm.registerAdapter(['scripted'], new ScriptedAdapter([
     toolResponse('outer', 'nested_present', {}), textResponse('Done'),
   ]))
+  const pipeline = new ToolExecutionPipeline(ctx)
   // An enclosing tool failure must not erase a successful nested present declaration.
   ctx.tools.register(defineTool({
     name: 'nested_present', description: 'Present then fail', parameters: {},
     output: { schema: { type: 'object', properties: {}, additionalProperties: false }, render: () => [] },
     async execute(_args, exec) {
-      await ctx.tools.execute({ name: 'present', arguments: { files: [{ path: filePath, description: 'Report' }] },
-        callId: ToolCallId('nested'), rootCallId: exec.rootCallId, parent: exec.token, agent: exec.agent, signal: exec.signal })
+      const prepared = await pipeline.prepare({ name: 'present', arguments: { files: [{ path: filePath, description: 'Report' }] },
+        callId: ToolCallId('nested'), rootCallId: exec.rootCallId, parent: exec.token, agent: exec.agent, signal: exec.signal, toolSet: exec.toolSet })
+      await pipeline.complete(prepared.exec, prepared.kind === 'dispatch' ? await pipeline.dispatch(prepared.exec) : prepared)
       throw new Error('enclosing tool failed')
     },
   }))

@@ -318,6 +318,33 @@ describe('AG-UI Gateway', () => {
     expect(dshAgent?.session.snapshotEvents().filter(event => event.type === 'turn/start')).toHaveLength(1)
   })
 
+  it('keeps an admitted conditional parallel tool in the run before a frontend park settles', async () => {
+    const harness = await mount([
+      toolCallsResponse([
+        { callId: 'conditional-frontend', name: PATCH_TOOL.name, args: { expectedVersion: 3, assessment: 'Conditional step.' } },
+        { callId: 'conditional-backend', name: BACKEND_TOOL.name, args: { recordId: 'record-7' } },
+      ]),
+      textResponse('The conditional step completed.'),
+    ])
+    harness.ctx.tools.register({ ...BACKEND_TOOL, isConcurrencySafe: () => true }, { when: () => true })
+    const agent = new HttpAgent({ url: harness.url, headers: HEADERS, threadId: 'encounter-conditional' })
+    agent.addMessage({ id: 'conditional-user', role: 'user', content: 'Patch and look up in parallel.' })
+
+    const parked = await runAgentEvents(agent, 'conditional-run-1', [PATCH_TOOL])
+    expect(parked.filter(event => event.type === EventType.TOOL_CALL_START))
+      .toEqual([
+        expect.objectContaining({ toolCallId: 'conditional-frontend', toolCallName: PATCH_TOOL.name }),
+        expect.objectContaining({ toolCallId: 'conditional-backend', toolCallName: BACKEND_TOOL.name }),
+      ])
+
+    agent.addMessage({ id: 'conditional-result', role: 'tool', toolCallId: 'conditional-frontend', content: 'Applied.' })
+    const resumed = await runAgentEvents(agent, 'conditional-run-2', [PATCH_TOOL])
+    expect(resumed.find(event => event.type === EventType.TOOL_CALL_RESULT))
+      .toMatchObject({ toolCallId: 'conditional-backend', role: 'tool' })
+    expect(agent.messages.findLast(message => message.role === 'assistant')?.content).toBe('The conditional step completed.')
+    expect(harness.ctx.agents.list()[0]?.session.snapshotEvents().filter(event => event.type === 'turn/start')).toHaveLength(1)
+  })
+
   it('accepts official-client backend ToolMessage history without echoing frontend results', async () => {
     const harness = await mount([
       toolResponse('backend-call', BACKEND_TOOL.name, { recordId: 'record-7' }),

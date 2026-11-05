@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Native absolute overlay paths resolve to file URLs on both Windows and POSIX.
 - Lazy adapter startup no longer arms idle shutdown during the active first run; the full idle window begins after the run completes.
 - The run-start `MESSAGES_SNAPSHOT` of a frontend Tool continuation carries the admitted Tool results, so clients keep them in turn order instead of dropping and re-appending them after the reply.
 - `MESSAGES_SNAPSHOT` now reconstructs assistant Tool calls from durable DSH messages, so Tool-only assistant messages and their results remain correlated after replay.
@@ -28,9 +29,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- Updated the exact DeepSeek Harness target to `0.2.1-rc.2`, Cordis `4.0.5`, and Schemastery `3.18.5`; removed the optional invariant companion because DSH no longer publishes that service.
-
-- Updated the Gateway and embedding adapter's exact DeepSeek Harness target to `0.2.0-rc.2`, with first-class tool-result messages, producer-specific context sources, declarative preset registration, and v4 session persistence.
+- Updated the Gateway and embedding adapter's exact DeepSeek Harness target to `0.2.2-rc.1`, Cordis `4.1.0`, Loader/Include `1.1.0`, Schemastery `3.19.0`, and Node.js `>=24.9.0`.
+- Mounted the separate native Tool executor in minimal Host examples and embedding fixtures; parked frontend calls retain the step's conditional Tool admission while the Gateway classifies remaining parallel calls through the public execution pipeline.
+- Read native turn boundaries through the owning registry instead of the deprecated untyped Session projection lookup.
+- Adopt typed staged-file receipts and the shared pipeline for nested Tool regression fixtures; legacy Session replay preserves its recorded provider/model route.
 - A run admits every new user message it carries into one DSH turn, in arrival order, and a run without new messages only synchronizes history; `INVALID_MESSAGE_BATCH` remains for batches mixing user messages with frontend Tool results.
 - Runs of one thread now queue in arrival order behind the active run instead of failing with `RUN_IN_PROGRESS`; a waiting client that disconnects is never admitted.
 - Raised the AG-UI dependency floor to `~0.0.59`, the first release that carries message `metadata`.

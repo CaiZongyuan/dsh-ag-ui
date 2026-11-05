@@ -33,7 +33,7 @@ A community [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 
 
 ## Requirements
 
-- Node.js `^22.19.0` or `>=24.0.0`
+- Node.js `>=24.9.0`
 - A DSH Profile containing the standard Host services
 - A registered DSH model provider and model
 - An authenticated Backend-for-Frontend that keeps the Gateway secret away from browsers
@@ -451,10 +451,12 @@ An unexpected HTTP disconnect cancels the Gateway-owned DSH turn. `HttpAgent` do
 | --- | --- |
 | AG-UI core/client/encoder | `>=0.0.59 <0.1.0` (`~0.0.59`; tested with `0.0.59`) |
 | `dsh-ag-ui/client` companion | `@ag-ui/client ~0.0.59` |
-| Node.js | `^22.19.0` or `>=24.0.0` |
-| DeepSeek Harness | `0.2.1-rc.2` (exact developer-preview peers) |
+| Node.js | `>=24.9.0` |
+| DeepSeek Harness | `0.2.2-rc.1` (exact developer-preview peers) |
 
-DSH `0.2.1-rc.2` uses session log v4. Live text arrives through `agent/assistant-stream`; settled history is read with `snapshotEvents()`. With the JSONL persistence plugin configured, DSH migrates older logs on resume (tested with a `0.1.1-rc.2` recording). Image and file Tool results are represented by `[image result]` and `[file result]` placeholders; attachment bytes are not transported.
+The Gateway and embedding adapter require Node.js `>=24.9.0`, Cordis `4.1.0`, and the matching `0.2.2-rc.1` DSH packages. A hand-composed Host must mount `@deepseek-ai/dsh-tool-executor-native` alongside `@deepseek-ai/dsh-tools`; the registry no longer supplies a default executor. The official native bundles already provide it. The Gateway reads turn boundaries through the owning Agent registry and retains each parked Tool call's step admission when deciding which parallel calls can still start.
+
+DSH `0.2.2-rc.1` uses session log v4. Live text arrives through `agent/assistant-stream`; settled history is read with `snapshotEvents()`. With the JSONL persistence plugin configured, DSH migrates older logs on resume (tested with a `0.1.1-rc.2` recording). Image and file Tool results are represented by `[image result]` and `[file result]` placeholders; attachment bytes are not transported.
 
 DSH is in developer preview and can introduce breaking changes. This package uses exact DSH peer versions until those APIs stabilize.
 
