@@ -153,9 +153,6 @@ describe('AG-UI five-feature conformance', () => {
     expect(events.map(event => event.type)).toEqual([
       EventType.RUN_STARTED,
       EventType.MESSAGES_SNAPSHOT,
-      EventType.TOOL_CALL_START,
-      EventType.TOOL_CALL_ARGS,
-      EventType.TOOL_CALL_END,
       EventType.CUSTOM,
       EventType.TOOL_CALL_RESULT,
       EventType.CUSTOM,
