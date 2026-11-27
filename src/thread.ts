@@ -149,7 +149,7 @@ export class ThreadBinding {
     isFrontendTool: (name) => this.frontendTools.has(name),
   }
   /** Whether an announced Tool would still start while a parked call holds the pool. */
-  private readonly startsWhileParked = (name: string): boolean =>false
+  private readonly startsWhileParked = (_name: string): boolean => false
   /** Whether an Agent is a chain root; a subagent carries a parent session in its header. */
   private isRoot(agent: Agent): boolean {
     return agent.session.header.parentSession === undefined
