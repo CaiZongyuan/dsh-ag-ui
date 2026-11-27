@@ -28,6 +28,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- DSH peer requirements are now ranges (`>=0.2.1-rc.2 <0.3.0-0`) instead of exact pins; the Gateway adapts to the 0.2.2 removal of `agents.roots()` and `tools.executionMode()`.
+  
 - Updated the exact DeepSeek Harness target to `0.2.1-rc.2`, Cordis `4.0.5`, and Schemastery `3.18.5`; removed the optional invariant companion because DSH no longer publishes that service.
 
 - Updated the Gateway and embedding adapter's exact DeepSeek Harness target to `0.2.0-rc.2`, with first-class tool-result messages, producer-specific context sources, declarative preset registration, and v4 session persistence.
