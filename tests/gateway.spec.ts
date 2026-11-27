@@ -220,6 +220,7 @@ describe('AG-UI Gateway', () => {
       EventType.TOOL_CALL_ARGS,
       EventType.TOOL_CALL_END,
       EventType.MESSAGES_SNAPSHOT,
+      EventType.RUN_FINISHED,
     ])
     const dshAgent = harness.ctx.agents.list()[0]
     expect(dshAgent?.status).toBe('running')
