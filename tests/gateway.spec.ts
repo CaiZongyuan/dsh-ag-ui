@@ -219,9 +219,6 @@ describe('AG-UI Gateway', () => {
       EventType.TOOL_CALL_START,
       EventType.TOOL_CALL_ARGS,
       EventType.TOOL_CALL_END,
-      EventType.TOOL_CALL_START,
-      EventType.TOOL_CALL_ARGS,
-      EventType.TOOL_CALL_END,
       EventType.MESSAGES_SNAPSHOT,
       EventType.RUN_FINISHED,
     ])
