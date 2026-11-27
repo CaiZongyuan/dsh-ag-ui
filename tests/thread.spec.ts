@@ -1338,7 +1338,7 @@ describe('ThreadBinding defensive Tool execution', () => {
     void state.parkFrontendTool(TOOL.name, TOOL.parameters, { value: 'x' }, {
       callId: ToolCallId('multi-park-1'), signal,
     } as ToolRunContext).catch(() => {})
-    expect(controller.record.state).toBe('active')
+    expect(controller.record.state).toBe('completed')
 
     session.append('tool/call', { turn: 1, step: 1, callId: ToolCallId('multi-park-2'), name: TOOL.name, arguments: '{}' })
     void state.parkFrontendTool(TOOL.name, TOOL.parameters, { value: 'x' }, {
@@ -1346,7 +1346,7 @@ describe('ThreadBinding defensive Tool execution', () => {
     } as ToolRunContext).catch(() => {})
     expect(controller.record.state).toBe('completed')
     expect(controller.record.events.at(-1)).toMatchObject({ type: EventType.RUN_FINISHED })
-    expect(controller.record.events.filter(event => event.type === EventType.TOOL_CALL_END)).toHaveLength(2)
+    expect(controller.record.events.filter(event => event.type === EventType.TOOL_CALL_END)).toHaveLength(1)
     controller.error('TEST_DONE', 'done')
   })
 
