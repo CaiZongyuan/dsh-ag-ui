@@ -20,9 +20,16 @@ import { agentPresetsOf } from './presets.ts'
 import { replayRun } from './run.ts'
 import { durableSessionId } from './session-id.ts'
 import { ThreadBinding, type RunAdmission, type ThreadOptions } from './thread.ts'
-import type { AgUiAgentLookup, AgUiPrincipal, AgUiThreadIdentity } from './types.ts'
+import type { AgUiAgentLookup, AgUiPrincipal, AgUiProjectionRequest, AgUiProjectionResult, AgUiThreadIdentity } from './types.ts'
 
 export type { AgUiAgentLookup, AgUiPrincipal, AgUiThreadIdentity } from './types.ts'
+export type {
+  AgUiProjectedDelivery,
+  AgUiProjectionDisposition,
+  AgUiProjectionRefusal,
+  AgUiProjectionRequest,
+  AgUiProjectionResult,
+} from './types.ts'
 export { AgUiGatewayError } from './errors.ts'
 export { TOOL_VIEW_NAME } from './tool-view.ts'
 export type { ToolViewEnvelope, ToolViewPhase } from './tool-view.ts'
@@ -228,6 +235,35 @@ export class AgUiGateway extends Service implements AgUiAgentLookup {
   identityFor(agent: Agent): AgUiThreadIdentity | undefined {
     const binding = this.owners.get(agent)
     return binding?.liveAgent === agent ? binding.identity : undefined
+  }
+
+  /**
+   * Project one Host-observed A2UI action into an existing Gateway-owned thread.
+   *
+   * The Gateway owns every thread → Agent binding, so an observer that is not a
+   * Gateway client locates the binding by its authenticated thread id or by the
+   * durable DSH session id carried on the observed event. A thread no client has
+   * opened yet is reported as unknown: opening it here would mint an Agent the
+   * observer cannot drive. A binding still being created reads the same way; the
+   * observer may retry once the client's first run is admitted.
+   *
+   * @param request - binding locator and the exact delivery to append.
+   * @returns where the delivery went, or why it was refused.
+   */
+  projectDelivery(request: AgUiProjectionRequest): AgUiProjectionResult {
+    const { threadId, sessionId } = request
+    if ((threadId === undefined && sessionId === undefined) || threadId === '' || sessionId === '') {
+      return { accepted: false, reason: 'unknown-thread' }
+    }
+    let match: ThreadBinding | undefined
+    for (const binding of this.bindings.values()) {
+      if (threadId !== undefined && binding.identity.threadId !== threadId) continue
+      if (sessionId !== undefined && String(binding.sessionId) !== sessionId) continue
+      if (match !== undefined) return { accepted: false, reason: 'ambiguous-thread' }
+      match = binding
+    }
+    if (match === undefined) return { accepted: false, reason: 'unknown-thread' }
+    return match.projectDelivery(request.delivery)
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {

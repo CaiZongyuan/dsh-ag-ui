@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to this project will be documented in this file.
 
@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- `AgUiGateway.projectDelivery()` lets a Host-side observer append one A2UI action to an existing Gateway-owned thread, located by authenticated thread id or durable DSH session id; accepted deliveries are emitted as a `dsh:a2ui:action` CUSTOM event.
 - Durable native projection of frontend Tool-result metadata through DSH presentation metadata.
 - Deterministic per-thread workspaces with DSH Web workspace registration when the Host provides it.
 - A `dsh-ag-ui/client` companion whose `DshHttpAgent` sends only messages relevant to the stateful Gateway's next admission while retaining full client history.

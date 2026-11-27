@@ -43,7 +43,7 @@ import { agentPresetsOf, sessionPresetOf } from './presets.ts'
 import { PendingInterrupts, type PreparedResume } from './interrupts.ts'
 import { RunController, type RunRecord } from './run.ts'
 import type { ToolPresenter } from './tool-view.ts'
-import type { AgUiPrincipal, AgUiThreadIdentity } from './types.ts'
+import type { AgUiPrincipal, AgUiProjectedDelivery, AgUiProjectionResult, AgUiThreadIdentity } from './types.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -61,6 +61,51 @@ const A2UI_RENDER_TOOL_NAME = 'render_a2ui'
 const A2UI_RENDERED_RESULT = JSON.stringify({ status: 'rendered' })
 const FRONTEND_TOOL_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/
 const IMAGE_MEDIA_TYPES = new Set<string>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+
+/** CUSTOM event name clients receive for one projected A2UI action. */
+const A2UI_PROJECTION_EVENT_NAME = 'dsh:a2ui:action'
+/** Marker that keeps a projected action from being re-consumed as fresh input. */
+const A2UI_PROJECTION_MARKER = '_projectedFromA2UI'
+/** Bound on projections waiting for the next run. */
+const MAX_PENDING_PROJECTIONS = 64
+
+/**
+ * Validate one delivered projection and return its user action, or undefined when malformed.
+ *
+ * The Gateway admits a projection only when both halves of the synthetic pair agree,
+ * because a client that consumes them cannot repair a mismatch later.
+ */
+function validateProjectedDelivery(delivery: AgUiProjectedDelivery): Record<string, unknown> | undefined {
+  const record: unknown = delivery
+  if (!isUnknownRecord(record)) return undefined
+  const identity = record['identity']
+  if (typeof identity !== 'string' || identity === '' || identity.length > 512) return undefined
+  const props = record['forwardedProps']
+  if (!isUnknownRecord(props)) return undefined
+  if (props[A2UI_PROJECTION_MARKER] !== true) return undefined
+  const envelope = props['a2uiAction']
+  if (!isUnknownRecord(envelope)) return undefined
+  const userAction = envelope['userAction']
+  if (!isUnknownRecord(userAction)) return undefined
+  const messages = record['messages']
+  if (!Array.isArray(messages) || messages.length !== 2) return undefined
+  const assistant = messages[0]
+  const result = messages[1]
+  if (!isUnknownRecord(assistant) || !isUnknownRecord(result)) return undefined
+  const toolCalls = assistant['toolCalls']
+  if (assistant['role'] !== 'assistant' || assistant['content'] !== '' || !Array.isArray(toolCalls) || toolCalls.length !== 1) return undefined
+  const call = toolCalls[0]
+  if (!isUnknownRecord(call)) return undefined
+  const fn = call['function']
+  if (!isUnknownRecord(fn) || fn['name'] !== A2UI_ACTION_TOOL_NAME) return undefined
+  if (result['role'] !== 'tool' || result['toolCallId'] !== call['id']) return undefined
+  return userAction
+}
+
+/** Wrap one projection as the CUSTOM event clients receive. */
+function projectionEvent(delivery: AgUiProjectedDelivery): { type: EventType.CUSTOM; name: string; value: AgUiProjectedDelivery } {
+  return { type: EventType.CUSTOM, name: A2UI_PROJECTION_EVENT_NAME, value: delivery }
+}
 
 /** Runtime limits and model route resolved from Gateway config. */
 export interface ThreadOptions {
@@ -175,6 +220,10 @@ export class ThreadBinding {
   private readonly userMessageIds = new Map<string, string>()
   private sharedStateActive = false
   private stateToolDispose: (() => void) | undefined
+  /** One canonical user action per accepted projection identity. */
+  private readonly projectedActions = new Map<string, string>()
+  /** Projections observed while no run owned the stream, replayed at the next RUN_STARTED. */
+  private readonly pendingProjections: AgUiProjectedDelivery[] = []
 
   constructor(
     private readonly ctx: Context,
@@ -486,6 +535,49 @@ export class ThreadBinding {
   }
 
   /**
+   * Append one Host-observed A2UI action to this thread's event stream.
+   *
+   * One delivery is accepted once per identity: a replay with the same payload is
+   * a duplicate, a replay with a different payload is a conflict. While a run owns
+   * the stream the delivery is emitted immediately as a CUSTOM event; otherwise it
+   * waits for the next run and is emitted right after that run's RUN_STARTED, so
+   * the observed order survives a gap between runs.
+   *
+   * @param delivery - exact A2UI action delivery to append.
+   * @returns where the delivery went, or why it was refused.
+   */
+  projectDelivery(delivery: AgUiProjectedDelivery): AgUiProjectionResult {
+    if (this.disposed) return { accepted: false, reason: 'thread-disposed' }
+    const userAction = validateProjectedDelivery(delivery)
+    if (userAction === undefined) return { accepted: false, reason: 'invalid-delivery' }
+    const canonical = JSON.stringify(userAction)
+    const previous = this.projectedActions.get(delivery.identity)
+    if (previous !== undefined) {
+      return previous === canonical
+        ? { accepted: false, reason: 'duplicate-identity' }
+        : { accepted: false, reason: 'identity-conflict' }
+    }
+    const active = this.activeRun
+    if (active === undefined || active.record.state !== 'active') {
+      if (this.pendingProjections.length >= MAX_PENDING_PROJECTIONS) return { accepted: false, reason: 'queue-full' }
+      this.projectedActions.set(delivery.identity, canonical)
+      this.pendingProjections.push(delivery)
+      return { accepted: true, disposition: 'queued' }
+    }
+    this.projectedActions.set(delivery.identity, canonical)
+    active.emit(projectionEvent(delivery))
+    return { accepted: true, disposition: 'emitted' }
+  }
+
+  /** Drain projections observed before this run opened; called once per run, right after RUN_STARTED. */
+  flushProjections(controller: RunController): void {
+    while (this.pendingProjections.length > 0) {
+      const next = this.pendingProjections.shift()
+      if (next !== undefined) controller.emit(projectionEvent(next))
+    }
+  }
+
+  /**
    * Start an admitted run after its SSE sink is attached.
    * @param controller - exact controller returned by {@link admit} or {@link reserveRun}; history runs retain their identity without reserving the Agent.
    */
@@ -495,6 +587,7 @@ export class ThreadBinding {
       throw new AgUiGatewayError('RUN_NOT_ACTIVE', 'The AG-UI run lost its reservation.', 409)
     }
     controller.start()
+    this.flushProjections(controller)
     // a restarted thread reports its interrupted turn once, after its history, so the client can drop parked calls
     if (this.interrupted) {
       this.interrupted = false
