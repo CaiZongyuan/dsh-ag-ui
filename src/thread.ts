@@ -156,9 +156,12 @@ export class ThreadBinding {
     isFrontendTool: (name) => this.frontendTools.has(name),
   }
   /** Whether an announced Tool would still start while a parked call holds the pool. */
-  private readonly startsWhileParked = (name: string): boolean =>
+  private readonly startsWhileParked = (name: string): boolean =>false
     false
-
+/** Whether an Agent is a chain root; a subagent carries a parent session in its header. */
+  private isRoot(agent: Agent): boolean {
+    return agent.session.header.parentSession === undefined；
+  }
   private handle: AgentHandle | undefined
   private agent: Agent | undefined
   private disposed = false
@@ -306,7 +309,7 @@ export class ThreadBinding {
 
   private ownsHumanTurn(agent: Agent): boolean {
     return !this.disposed && this.nativeTurn !== undefined && this.ctx.agents.get(agent.id) === agent
-      && this.ctx.agents.list().some((candidate)=>candidate.id===agent.id && isRoot(candidate))
+      && this.ctx.agents.list().some((candidate) => candidate.id === agent.id && this.isRoot(candidate))
   }
 
   /** Compose the agent from its preset; a thread resumes the composition its own log recorded. */
