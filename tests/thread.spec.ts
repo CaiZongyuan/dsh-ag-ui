@@ -350,7 +350,7 @@ describe('ThreadBinding run admission', () => {
 
   it('reclaims completed history records without evicting active history or work', async () => {
     const { binding } = await mount([], { maxRunsPerThread: 3 })
-    const active = binding.reserveRun(input('active', [{ id: 'user', role: 'user', content: 'hello' }]), 'active')
+    const active = binding.reserveRun(input(, [{ id: 'user', role: 'user', content: 'hello' }]), )
     const first = await binding.admit(input('first-history', []), 'first', new AbortController().signal)
     const second = await binding.admit(input('second-history', []), 'second', new AbortController().signal)
     if ('replay' in first || 'replay' in second) throw new Error('Expected history admission')
