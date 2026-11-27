@@ -20,7 +20,7 @@ import type {
   AttachmentAdmissionPart,
   FileAttachmentRef,
 } from '@deepseek-ai/dsh-attachment'
-import { createUserMessage, errorChain, freezeMessage, MessageId, ToolCallId, type UserMessage, type ContextFormed } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, errorChain, freezeMessage, MessageId, type UserMessage, type ContextFormed } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-projection'
@@ -61,13 +61,6 @@ const A2UI_RENDER_TOOL_NAME = 'render_a2ui'
 const A2UI_RENDERED_RESULT = JSON.stringify({ status: 'rendered' })
 const FRONTEND_TOOL_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/
 const IMAGE_MEDIA_TYPES = new Set<string>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
-
-/** Fixed identity for registry scheduling probes that never dispatch. */
-const SCHEDULING_PROBE = {
-  callId: ToolCallId('ag-ui-scheduling-probe'),
-  arguments: {},
-  signal: new AbortController().signal,
-}
 
 /** Runtime limits and model route resolved from Gateway config. */
 export interface ThreadOptions {
@@ -157,10 +150,9 @@ export class ThreadBinding {
   }
   /** Whether an announced Tool would still start while a parked call holds the pool. */
   private readonly startsWhileParked = (name: string): boolean =>false
-    false
-/** Whether an Agent is a chain root; a subagent carries a parent session in its header. */
+  /** Whether an Agent is a chain root; a subagent carries a parent session in its header. */
   private isRoot(agent: Agent): boolean {
-    return agent.session.header.parentSession === undefined；
+    return agent.session.header.parentSession === undefined
   }
   private handle: AgentHandle | undefined
   private agent: Agent | undefined
